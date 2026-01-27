@@ -12,7 +12,7 @@ import threading
 import time
 import json
 import shutil 
-
+import csv
 
 from enum import Enum
 from typing import Optional, Dict, List
@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QGridLayout, QScrollArea, QGraphicsDropShadowEffect,
                                QComboBox, QProgressDialog, QTabWidget, QMenu, QInputDialog,
                                QSplitter, QAbstractItemView, QButtonGroup, QSizePolicy, QGroupBox,
-                               QDoubleSpinBox)
+                               QDoubleSpinBox, QFileDialog,QStackedWidget)
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QFont, QCursor, QPixmap, QColor
 
@@ -548,6 +548,36 @@ STYLESHEET = """
     
     /* ÖDEME BUTONLARI */
     QPushButton.PayBtn { border-radius: 12px; font-size: 22px; font-weight: 800; color: white; }
+
+    /* SAĞ PANEL - PARA ÜSTÜ LİSTESİ */
+    QLabel.ChangeDenom {
+        color: #aaaaaa;
+        font-size: 16px;
+        font-weight: bold;
+        font-family: 'Consolas', 'Courier New', monospace;
+    }
+    QLabel.ChangeArrow {
+        color: #555555;
+        font-size: 16px;
+        font-weight: bold;
+    }
+    QLabel.ChangeResult {
+        color: #30d158; /* Yeşil Sonuç */
+        font-size: 22px;
+        font-weight: 900;
+        font-family: 'Consolas', 'Courier New', monospace;
+    }
+    QLabel.ChangeResultError {
+        color: #444; /* Sönük */
+        font-size: 16px;
+        font-style: italic;
+        font-family: 'Consolas', 'Courier New', monospace;
+    }
+    QFrame#ChangeFrame {
+        background-color: #202020;
+        border-radius: 12px;
+        border: 1px solid #333;
+    }
 """
 
 # --- VERİTABANI ---
@@ -619,16 +649,75 @@ class DatabaseManager:
             )
         """)
         
-        self.cursor.execute("INSERT OR IGNORE INTO categories (name, sort_order) VALUES ('Tüm Ürünler', 0)")
-        self.cursor.execute("INSERT OR IGNORE INTO categories (name, sort_order) VALUES ('Sigara', 1)")
-        self.cursor.execute("INSERT OR IGNORE INTO categories (name, sort_order) VALUES ('Viski', 2)")
-        self.cursor.execute("INSERT OR IGNORE INTO categories (name, sort_order) VALUES ('Rakı', 3)")
+        self.cursor.execute("INSERT OR IGNORE INTO categories (name, sort_order) VALUES ('Sigara', 0)")
+        self.cursor.execute("INSERT OR IGNORE INTO categories (name, sort_order) VALUES ('Viski', 1)")
         
         self.conn.commit()
     
+    # DatabaseManager sınıfının içine ekleyin:
+
+    def export_products_to_csv(self, filename):
+        """Ürünleri CSV dosyasına aktarır"""
+        try:
+            products = self.cursor.execute("SELECT * FROM products").fetchall()
+            headers = [description[0] for description in self.cursor.description]
+            
+            # utf-8-sig: Excel'in Türkçe karakterleri tanıması için gereklidir
+            with open(filename, 'w', newline='', encoding='utf-8-sig') as f:
+                writer = csv.writer(f)
+                writer.writerow(headers)
+                writer.writerows(products)
+            return True, f"{len(products)} ürün dışa aktarıldı."
+        except Exception as e:
+            return False, str(e)
+
+    def import_products_from_csv(self, filename):
+        """CSV dosyasından ürünleri günceller"""
+        try:
+            with open(filename, 'r', newline='', encoding='utf-8-sig') as f:
+                reader = csv.DictReader(f)
+                count = 0
+                for row in reader:
+                    pid = row.get('id')
+                    if not pid: continue
+                    
+                    # Veritabanını güncelle
+                    self.cursor.execute("""
+                        UPDATE products SET 
+                        name=?, cost_price=?, sell_price=?, stock=?, 
+                        critical_stock=?, category=?, barcode=?, image_path=?
+                        WHERE id=?
+                    """, (
+                        row['name'], row['cost_price'], row['sell_price'], row['stock'],
+                        row['critical_stock'], row['category'], row['barcode'], row['image_path'],
+                        pid
+                    ))
+                    count += 1
+                
+            self.conn.commit()
+            return True, f"{count} ürün güncellendi."
+        except Exception as e:
+            return False, str(e)
+        
     def get_all_categories(self):
         self.cursor.execute("SELECT name FROM categories ORDER BY sort_order ASC")
         return [r[0] for r in self.cursor.fetchall()]
+        
+    def get_todays_sales(self):
+        today_str = str(datetime.date.today())
+        query = f"""
+            SELECT s.id, s.receipt_no, s.sale_date, s.timestamp, s.payment_method, s.total_amount,
+            (SELECT product_name FROM sale_items WHERE sale_id = s.id LIMIT 1) as first_prod
+            FROM sales s 
+            WHERE s.sale_date = '{today_str}' 
+            ORDER BY s.id DESC
+        """
+        return self.cursor.execute(query).fetchall()
+
+    def get_todays_totals(self):
+        today_str = str(datetime.date.today())
+        self.cursor.execute(f"SELECT SUM(total_amount), SUM(total_profit) FROM sales WHERE sale_date='{today_str}'")
+        return self.cursor.fetchone()
     
     def get_daily_turnover(self):
         today = str(datetime.date.today())
@@ -687,7 +776,17 @@ class DatabaseManager:
     def add_category(self, n):
         self.cursor.execute("INSERT INTO categories (name, sort_order) VALUES (?, 99)", (n,))
         self.conn.commit()
-    
+
+    def rename_category(self, old_name, new_name):
+        try:
+            self.cursor.execute("UPDATE categories SET name=? WHERE name=?", (new_name, old_name))
+            # Ürünlerin de kategorisini güncellememiz lazım ki bağ kopmasın
+            self.cursor.execute("UPDATE products SET category=? WHERE category=?", (new_name, old_name))
+            self.conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False # İsim çakışması
+        
     def record_sale(self, items, total, method):
         profit = sum([(i['price'] - self.get_cost(i['name'])) * i['qty'] for i in items])
         self.cursor.execute(
@@ -804,6 +903,119 @@ class MplCanvas(FigureCanvas):
 
 
 # --- UI BİLEŞENLERİ ---
+class CustomerCartTab(QWidget):
+    # Sinyaller: Toplam değiştiğinde veya Numpad kullanıldığında ana pencereye haber vermek için
+    totalChanged = Signal(float) 
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.cart_data = [] # Her müşterinin kendi sepet verisi
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        
+        # --- TABLO ---
+        self.table = QTableWidget()
+        self.table.setColumnCount(4) # İsim, Fiyat, Adet, Sil Butonu
+        self.table.setHorizontalHeaderLabels(["ÜRÜN", "FİYAT", "ADET", "İŞLEM"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch) # İsim genişlesin
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Fixed)   # Sil butonu sabit
+        self.table.setColumnWidth(3, 80)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SingleSelection)
+        
+        # Stil
+        self.table.setStyleSheet("""
+            QTableWidget { background-color: #1e1e1e; border: none; color: #fff; gridline-color: #303030; font-size: 16px; }
+            QTableWidget::item { padding: 5px; border-bottom: 1px solid #303030; }
+            QTableWidget::item:selected { background-color: #0a84ff; color: #fff; }
+            QLineEdit { background: #333; color: white; border: 1px solid #0a84ff; }
+        """)
+
+        # Hücre değişince tetiklenecek sinyal (Manuel düzenleme için)
+        self.table.itemChanged.connect(self.on_item_changed)
+        
+        self.layout.addWidget(self.table)
+
+    def add_item(self, name, price, qty=1):
+        # Ürün zaten var mı?
+        for row in range(self.table.rowCount()):
+            if self.table.item(row, 0).text() == name:
+                # Varsa adeti artır
+                current_qty = int(self.table.item(row, 2).text())
+                self.update_row_qty(row, current_qty + qty)
+                self.select_row(row)
+                return
+
+        # Yoksa yeni satır ekle
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        
+        # 1. İsim (Düzenlenebilir)
+        item_name = QTableWidgetItem(name)
+        item_name.setFlags(item_name.flags() | Qt.ItemIsEditable)
+        self.table.setItem(row, 0, item_name)
+        
+        # 2. Fiyat (Düzenlenebilir)
+        item_price = QTableWidgetItem(f"{float(price):.2f}")
+        item_price.setFlags(item_price.flags() | Qt.ItemIsEditable)
+        self.table.setItem(row, 1, item_price)
+        
+        # 3. Adet (Düzenlenebilir)
+        item_qty = QTableWidgetItem(str(qty))
+        item_qty.setTextAlignment(Qt.AlignCenter)
+        item_qty.setFont(QFont("Segoe UI", 14, QFont.Bold))
+        item_qty.setForeground(QColor("#30d158"))
+        item_qty.setFlags(item_qty.flags() | Qt.ItemIsEditable)
+        self.table.setItem(row, 2, item_qty)
+        
+        # 4. Akıllı Silme Butonu
+        btn_del = QPushButton("Sil (-1)")
+        btn_del.setStyleSheet("background-color: #ff453a; color: white; font-weight: bold; border-radius: 4px;")
+        btn_del.clicked.connect(lambda: self.smart_delete(row))
+        self.table.setCellWidget(row, 3, btn_del)
+        
+        self.select_row(row)
+        self.recalc_total()
+
+    def update_row_qty(self, row, new_qty):
+        # Sinyali geçici olarak durdur (sonsuz döngüyü önlemek için)
+        self.table.blockSignals(True)
+        self.table.item(row, 2).setText(str(new_qty))
+        self.table.blockSignals(False)
+        self.recalc_total()
+
+    def on_item_changed(self, item):
+        self.recalc_total()
+
+    def smart_delete(self, row=None):
+        """Sil butonuna basınca: Adet > 1 ise azalt, 1 ise silmeyi sor"""
+        if row is None: 
+            row = self.table.currentRow()
+        
+        if row < 0: return
+
+        try:
+            qty_item = self.table.item(row, 2)
+            
+            if not qty_item: return
+            
+            qty = int(qty_item.text())
+            
+            if qty > 1:
+                self.update_row_qty(row, qty - 1)
+            else:
+                reply = QMessageBox.question(self, "Sil", "Ürün sepetten kaldırılsın mı?", 
+                                             QMessageBox.Yes | QMessageBox.No)
+                if reply == QMessageBox.Yes:
+                    self.table.removeRow(row)
+                    self.recalc_total()
+                    
+        except ValueError:
+            pass # Sayı değilse işlem yapma
+        except Exception as e:
+            print(f"Hata: {e}")
+
 class ProductCard(QFrame):
     def __init__(self, pid, name, price, img_path, is_fav, stock, click_cb, update_cb, db_manager, is_mini=False):
         super().__init__()
@@ -816,13 +1028,14 @@ class ProductCard(QFrame):
         self.db = db_manager
         self.fav = is_fav
         
+        # Kart Boyutlandırma
         if is_mini:
             self.setFixedSize(95, 120)
             icon_size = 60
-            font_sz = 15
-            font_p_sz = 15
+            font_sz = 13
+            font_p_sz = 14
         else:
-            self.setFixedSize(140, 195)
+            self.setFixedSize(165, 195)
             icon_size = 60
             font_sz = 12
             font_p_sz = 20
@@ -837,23 +1050,26 @@ class ProductCard(QFrame):
         layout.setContentsMargins(5, 5, 5, 5)
         layout.setSpacing(2)
         
+        # --- Üst Bar (Menü Butonu) ---
         top_bar = QHBoxLayout()
         top_bar.setContentsMargins(0, 0, 0, 0)
         top_bar.addStretch()
         
-        if not is_mini:
-            self.btn_menu = QPushButton("⋮")
-            self.btn_menu.setFixedSize(20, 20)
-            self.btn_menu.setProperty("class", "CardMenuBtn")
-            self.btn_menu.setCursor(Qt.PointingHandCursor)
-            self.btn_menu.clicked.connect(self.show_options_menu)
-            top_bar.addWidget(self.btn_menu)
+        self.btn_menu = QPushButton("⋮")
+        self.btn_menu.setFixedSize(20, 20)
+        self.btn_menu.setStyleSheet("background:transparent; color:#888; font-weight:bold; border:none;")
+        self.btn_menu.setCursor(Qt.PointingHandCursor)
+        self.btn_menu.clicked.connect(self.show_options_menu)
+        top_bar.addWidget(self.btn_menu)
         
         layout.addLayout(top_bar)
         
+        # --- İkon ---
         icon_cont = QWidget()
         ic_lay = QVBoxLayout(icon_cont)
         ic_lay.setContentsMargins(0, 0, 0, 0)
+        
+        # Resim yoksa baş harfi göster
         icon = QLabel(name[0].upper() if name else "?")
         icon.setAlignment(Qt.AlignCenter)
         icon.setFixedSize(icon_size, icon_size)
@@ -866,10 +1082,11 @@ class ProductCard(QFrame):
         ic_lay.addWidget(icon, 0, Qt.AlignCenter)
         layout.addWidget(icon_cont)
         
+        # --- İsim ve Fiyat ---
         name_lbl = QLabel(name)
         name_lbl.setWordWrap(True)
         name_lbl.setAlignment(Qt.AlignCenter)
-        name_lbl.setStyleSheet(f"color:#e0e0e0; font-weight:600; font-size:{font_sz}px; border:none; background-color: #252525;")
+        name_lbl.setStyleSheet(f"color:#e0e0e0; font-weight:600; font-size:{font_sz}px; border:none; background:transparent;")
         layout.addWidget(name_lbl)
         
         price_lbl = QLabel(f"{price:.2f} ₺")
@@ -880,82 +1097,122 @@ class ProductCard(QFrame):
         if not is_mini:
             stock_lbl = QLabel(f"Stok: {stock}")
             stock_lbl.setAlignment(Qt.AlignCenter)
-            stock_lbl.setStyleSheet("color: #888; font-size: 11px; margin-top: 2px; background-color: #252525;")
+            stock_lbl.setStyleSheet("color: #888; font-size: 11px; margin-top: 2px; border:none; background:transparent;")
             layout.addWidget(stock_lbl)
         
         layout.addStretch()
-    
+
+    # --- Tıklama Olayı (Tek ve Düzgün Hali) ---
     def mousePressEvent(self, e):
+        # Eğer tıklanan yer menü butonu ise kartın click eventini çalıştırma
         child = self.childAt(e.pos())
-        if child != getattr(self, "btn_menu", None):
-            if e.button() == Qt.LeftButton:
-                self.cb(self.name_val, self.price_val)
+        if child == self.btn_menu:
+            return
+            
+        if e.button() == Qt.LeftButton:
+            # Buradaki callback'in parametreleri __init__ içinde gelen yapıya uygun olmalı
+            self.cb(self.name_val, self.price_val)
     
+    # --- Sağ Tık / Menü Butonu Menüsü ---
     def show_options_menu(self):
         menu = QMenu(self)
-        act_fav = menu.addAction("Hızlı Erişimden Kaldır" if self.fav else "Hızlı Erişime Ekle")
-        act_fav.triggered.connect(lambda: self.toggle_fav())
+        menu.setStyleSheet("QMenu { background-color: #252525; color: white; border: 1px solid #444; } QMenu::item:selected { background-color: #0a84ff; }")
+        
+        # Hızlı Erişim
+        act_fav = menu.addAction("⭐ Hızlı Erişimden Kaldır" if self.fav else "⭐ Hızlı Erişime Ekle")
+        act_fav.triggered.connect(self.toggle_fav)
+        
         menu.addSeparator()
-        act_price = menu.addAction("Fiyat Değiştir")
+        
+        # Fiyat Değiştir
+        act_price = menu.addAction("💰 Fiyat Değiştir")
         act_price.triggered.connect(self.change_price)
-        act_stock = menu.addAction("Stok Sayım/Düzenle")
+        
+        # İsim Değiştir (Yarım kalan fonksiyon düzeltildi)
+        act_name = menu.addAction("✏️ İsim Değiştir")
+        act_name.triggered.connect(self.change_name)
+
+        # Stok İşlemleri
+        act_stock = menu.addAction("📦 Stok Sayım/Düzenle")
         act_stock.triggered.connect(self.change_stock)
-        act_cost = menu.addAction("Maliyet Değiştir")
+        
+        # Kritik Stok
+        act_crit = menu.addAction("⚠️ Kritik Stok Limiti")
+        act_crit.triggered.connect(self.change_critical_stock)
+        
+        # Maliyet
+        act_cost = menu.addAction("📉 Maliyet Değiştir")
         act_cost.triggered.connect(self.change_cost)
+        
         menu.addSeparator()
-        cat_menu = menu.addMenu("Kategoriye Taşı")
-        for cat in self.db.get_all_categories():
-            if cat == "Tüm Ürünler":
-                continue
+        
+        # Kategori Taşıma
+        cat_menu = menu.addMenu("📂 Kategoriye Taşı")
+        cat_menu.setStyleSheet("QMenu { background-color: #252525; color: white; border: 1px solid #444; }")
+        
+        # DB'den kategorileri çekiyoruz
+        categories = self.db.get_all_categories() if hasattr(self.db, 'get_all_categories') else []
+        for cat in categories:
+            if cat == "Tüm Ürünler": continue
             cat_menu.addAction(cat, lambda c=cat: self.move_to_category(c))
+            
         menu.exec(QCursor.pos())
-    
+
+    # --- İşlev Fonksiyonları ---
+
     def toggle_fav(self):
         self.db.toggle_favorite(self.pid, 0 if self.fav else 1)
         self.update_cb()
-    
+
     def change_price(self):
         val, ok = QInputDialog.getDouble(self, "Fiyat", "Yeni Satış Fiyatı:", self.price_val, 0, 100000, 2)
         if ok:
             self.db.update_product_field(self.pid, "sell_price", val)
             self.update_cb()
-    
+            
+    def change_name(self):
+        text, ok = QInputDialog.getText(self, "İsim Değiştir", "Yeni Ürün Adı:", text=self.name_val)
+        if ok and text:
+            self.db.update_product_field(self.pid, "name", text)
+            self.update_cb()
+
     def change_stock(self):
         val, ok = QInputDialog.getInt(self, "Stok", "Yeni Stok Adedi:", self.stock_val, -1000, 100000, 1)
         if ok:
             self.db.update_product_field(self.pid, "stock", val)
             self.update_cb()
-    
+
+    def change_critical_stock(self):
+        # Mevcut kritik stoğu çekmeye çalış, yoksa varsayılan 5
+        # Not: DB yapınıza göre get_product_by_id dönüşü değişebilir.
+        curr = 5 
+        try:
+            prod_data = self.db.get_product_by_id(self.pid)
+            if prod_data and len(prod_data) > 5:
+                curr = prod_data[5] # 5. indexin kritik stok olduğunu varsayıyoruz
+        except:
+            pass
+            
+        val, ok = QInputDialog.getInt(self, "Kritik Stok", "Uyarı verilecek stok limiti:", curr, 0, 1000, 1)
+        if ok:
+            self.db.update_product_field(self.pid, "critical_stock", val)
+            self.update_cb()
+
     def change_cost(self):
-        current_cost = self.db.get_cost(self.name_val)
+        # get_cost fonksiyonu isme göre değil ID'ye göre çalışsa daha güvenli olur ama mevcut yapıyı korudum
+        current_cost = 0.0
+        if hasattr(self.db, 'get_cost'):
+             current_cost = self.db.get_cost(self.name_val)
+             
         val, ok = QInputDialog.getDouble(self, "Maliyet", "Yeni Maliyet:", current_cost, 0, 100000, 2)
         if ok:
             self.db.update_product_field(self.pid, "cost_price", val)
             self.update_cb()
-    
+
     def move_to_category(self, cat_name):
         self.db.update_product_field(self.pid, "category", cat_name)
         self.update_cb()
         QMessageBox.information(self, "Taşındı", f"Ürün '{cat_name}' kategorisine taşındı.")
-
-
-class CategoryCard(QFrame):
-    def __init__(self, name, click_cb):
-        super().__init__()
-        self.setFixedSize(140, 140)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setStyleSheet("""
-            QFrame { background-color: #252525; border-radius: 16px; border: 1px solid #353535; }
-            QFrame:hover { background-color: #303030; border: 1px solid #0a84ff; }
-        """)
-        l = QVBoxLayout(self)
-        l.setAlignment(Qt.AlignCenter)
-        lbl = QLabel(name)
-        lbl.setAlignment(Qt.AlignCenter)
-        lbl.setWordWrap(True)
-        lbl.setStyleSheet("color: white; font-size: 16px; font-weight: bold; border: none; background: transparent;")
-        l.addWidget(lbl)
-        self.mousePressEvent = lambda e: click_cb(name)
 
 
 class MergedNumpad(QWidget):
@@ -970,7 +1227,7 @@ class MergedNumpad(QWidget):
         positions = [(i, j) for i in range(4) for j in range(3)]
         for position, key in zip(positions, keys):
             btn = QPushButton(key)
-            btn.setFixedHeight(50)
+            btn.setFixedHeight(70)
             btn.setProperty("class", "NumBtn")
             if key == '⌫':
                 btn.setStyleSheet("color: #ff453a; font-weight:900;")
@@ -1017,48 +1274,102 @@ class ClickableLabel(QLabel):
         super().mousePressEvent(event)
 
 class CategoryCard(QFrame):
-    def __init__(self, name, click_cb):
+    def __init__(self, name, click_cb, is_add_button=False, db_manager=None, refresh_cb=None):
         super().__init__()
-        self.setFixedSize(130, 100) # Kutucuk boyutu
+        self.setFixedSize(160, 100)
         self.setCursor(Qt.PointingHandCursor)
-        self.setStyleSheet("""
-            QFrame { 
-                background-color: #333; 
-                border-radius: 12px; 
-                border: 1px solid #444; 
-            }
-            QFrame:hover { 
-                background-color: #404040; 
-                border: 1px solid #0a84ff; 
-            }
-        """)
+        self.name = name
+        self.db = db_manager
+        self.refresh_cb = refresh_cb
+        self.cb = click_cb
         
-        l = QVBoxLayout(self)
-        l.setSpacing(5)
-        l.setAlignment(Qt.AlignCenter)
+        if is_add_button:
+            # Ekleme Butonu Stili (CSS Hatası Düzeltildi)
+            self.setStyleSheet("""
+                QFrame { background-color: rgba(48, 209, 88, 0.1); border-radius: 12px; border: 1px dashed #30d158; }
+                QFrame:hover { background-color: rgba(48, 209, 88, 0.2); }
+            """)
+            lbl_color = "#30d158"
+            icon_text = "+"
+            font_size = "32px"
+        else:
+            # Normal Kategori Stili (CSS Hatası Düzeltildi)
+            self.setStyleSheet("""
+                QFrame { background-color: #252525; border-radius: 12px; border: 1px solid #333; }
+                QFrame:hover { background-color: #303030; border: 1px solid #0a84ff; }
+            """)
+            lbl_color = "#0a84ff"
+            icon_text = name[0].upper() if name else "?"
+            font_size = "24px"
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(5,5,5,5)
+        layout.setSpacing(2)
+
+        # --- Üst Bar (Menü Butonu) ---
+        top_bar = QHBoxLayout()
+        top_bar.addStretch()
         
-        # İkon veya Harf
-        icon_lbl = QLabel(name[0].upper())
-        icon_lbl.setStyleSheet("color: #0a84ff; font-size: 24px; font-weight: bold; border:none; background:transparent;")
+        # Sadece normal kategorilerde ve "Tüm Ürünler" değilse menü göster
+        if not is_add_button and name != "Tüm Ürünler":
+            self.btn_menu = QPushButton("⋮")
+            self.btn_menu.setFixedSize(20, 20)
+            self.btn_menu.setStyleSheet("background:transparent; color:#888; font-weight:bold; border:none;")
+            self.btn_menu.setCursor(Qt.PointingHandCursor)
+            self.btn_menu.clicked.connect(self.show_options)
+            top_bar.addWidget(self.btn_menu)
+        
+        layout.addLayout(top_bar)
+
+        # --- İçerik (İkon + İsim) ---
+        content_lay = QVBoxLayout()
+        content_lay.setSpacing(5)
+        
+        icon_lbl = QLabel(icon_text)
+        icon_lbl.setStyleSheet(f"color: {lbl_color}; font-size: {font_size}; font-weight: bold; border:none; background:transparent;")
         icon_lbl.setAlignment(Qt.AlignCenter)
         
-        # İsim
         lbl = QLabel(name)
         lbl.setAlignment(Qt.AlignCenter)
         lbl.setWordWrap(True)
-        lbl.setStyleSheet("color: white; font-size: 14px; font-weight: 600; border: none; background: transparent;")
+        lbl.setStyleSheet("color: white; font-size: 13px; font-weight: 600; border: none; background: transparent;")
         
-        l.addWidget(icon_lbl)
-        l.addWidget(lbl)
+        content_lay.addWidget(icon_lbl)
+        content_lay.addWidget(lbl)
+        layout.addLayout(content_lay)
+        layout.addStretch()
+
+    def mousePressEvent(self, e):
+        # Menü butonuna basıldıysa kart tıklamasını engelle
+        child = self.childAt(e.pos())
+        if hasattr(self, 'btn_menu') and child == self.btn_menu:
+            return
+        if e.button() == Qt.LeftButton:
+            self.cb(self.name)
+
+    def show_options(self):
+        menu = QMenu(self)
+        menu.setStyleSheet("QMenu { background-color: #252525; color: white; border: 1px solid #444; } QMenu::item:selected { background-color: #0a84ff; }")
         
-        self.mousePressEvent = lambda e: click_cb(name)
+        act_rename = menu.addAction("✏️ İsim Değiştir")
+        act_rename.triggered.connect(self.rename_category)
+        
+        menu.exec(QCursor.pos())
+
+    def rename_category(self):
+        new_name, ok = QInputDialog.getText(self, "İsim Değiştir", "Yeni Kategori Adı:", text=self.name)
+        if ok and new_name:
+            if self.db.rename_category(self.name, new_name):
+                QMessageBox.information(self, "Başarılı", "Kategori güncellendi.")
+                if self.refresh_cb: self.refresh_cb()
+            else:
+                QMessageBox.warning(self, "Hata", "Bu isimde bir kategori zaten var!")
 
 # --- ANA UYGULAMA ---
 class NexusPOS(QMainWindow):
     def __init__(self):
         super().__init__()
         self.db = DatabaseManager()
-        self.cart_data = []
         self.selected_row = -1
         self.barcode_buffer = ""
         self.ciro_visible = True # Ciro görünürlük durumu
@@ -1071,8 +1382,6 @@ class NexusPOS(QMainWindow):
     def init_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
-        
-        # ANA LAYOUT
         main_lay = QHBoxLayout(central)
         main_lay.setContentsMargins(0, 0, 0, 0)
         main_lay.setSpacing(0)
@@ -1081,10 +1390,10 @@ class NexusPOS(QMainWindow):
         # 1. SOL PANEL (ARAMA + KATEGORİLER/ÜRÜNLER)
         # =================================================
         left_container = QFrame()
-        left_container.setFixedWidth(550) # Izgara için genişlettik
+        left_container.setFixedWidth(520) # Izgara için genişlettik
         left_container.setStyleSheet("background:#181818; border-right:1px solid #252525;")
         left_layout = QVBoxLayout(left_container)
-        left_layout.setContentsMargins(15, 15, 15, 15)
+        left_layout.setContentsMargins(5, 5, 5, 5)
         left_layout.setSpacing(15)
 
         # --- ARAMA KUTUSU ---
@@ -1093,8 +1402,8 @@ class NexusPOS(QMainWindow):
         search_lay.setContentsMargins(0,0,0,0)
         
         self.search_bar = QLineEdit()
-        self.search_bar.setPlaceholderText("🔍 Ürün Ara (İsim veya Barkod)...")
-        self.search_bar.setFixedHeight(50)
+        self.search_bar.setPlaceholderText("🔍 Ürün Ara (İsim veya Barkod)")
+        self.search_bar.setFixedHeight(40)
         self.search_bar.setStyleSheet("""
             QLineEdit {
                 background-color: #252525;
@@ -1155,6 +1464,19 @@ class NexusPOS(QMainWindow):
         top_bar.addWidget(btn_admin)
         center_layout.addLayout(top_bar)
         
+        self.cart_tabs = QTabWidget()
+        self.cart_tabs.setStyleSheet("""
+            QTabWidget::pane { border: 1px solid #333; background: #1a1a1a; }
+            QTabBar::tab { background: #252525; color: #888; padding: 10px 20px; border-top-left-radius: 8px; border-top-right-radius: 8px; margin-right: 2px; }
+            QTabBar::tab:selected { background: #0a84ff; color: white; font-weight: bold; }
+        """)
+        
+        # 3 Müşteri Sekmesi Ekle
+        for i in range(1, 4):
+            self.add_customer_tab(f"Müşteri {i}")
+            
+        center_layout.addWidget(self.cart_tabs)
+
         # Sepet Tablosu
         center_layout.addSpacing(15)
         self.table = QTableWidget()
@@ -1183,17 +1505,25 @@ class NexusPOS(QMainWindow):
         # =================================================
         # 3. SAĞ PANEL (NUMPAD - Aynı Kalıyor)
         # =================================================
+        # =================================================
+        # 3. SAĞ PANEL
+        # =================================================
         right_container = QFrame()
-        right_container.setFixedWidth(360)
+        right_container.setFixedWidth(400) # (360 -> 400) 
         right_container.setStyleSheet("background:#161616;")
         right_layout = QVBoxLayout(right_container)
         right_layout.setContentsMargins(15, 20, 15, 30)
-        right_layout.setSpacing(20)
+        right_layout.setSpacing(15)
         
-        right_layout.addStretch()
+        # 1. PARA ÜSTÜ PANELİ (Stretch = 1: Kalan tüm boşluğu kapla)
+        self.change_panel = self.create_change_list_panel()
+        right_layout.addWidget(self.change_panel, stretch=1)
+
+        # 2. NUMPAD (Stretch = 0: Sadece ihtiyacı kadar yer kapla, büyüme)
         self.numpad = MergedNumpad(self.numpad_action)
-        right_layout.addWidget(self.numpad)
+        right_layout.addWidget(self.numpad, stretch=0)
         
+        # 3. ÖDEME BUTONLARI (Sabit Yükseklik)
         pay_lay = QHBoxLayout()
         pay_lay.setSpacing(10)
         btn_cash = QPushButton("NAKİT")
@@ -1216,7 +1546,92 @@ class NexusPOS(QMainWindow):
         
         # Başlangıçta kategorileri yükle
         self.load_categories_grid()
-    
+
+    def create_change_list_panel(self):
+        """Sağ paneldeki liste şeklindeki para üstü alanını oluşturur"""
+        frame = QFrame()
+        frame.setObjectName("ChangeFrame")
+        
+        # Panelin dikeyde genişlemesine izin ver (QSizePolicy)
+        frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(10, 15, 10, 15)
+        layout.setSpacing(0) # Satır aralarını grid ile halledeceğiz
+
+        # Başlık
+        lbl_head = QLabel("PARA ÜSTÜ")
+        lbl_head.setStyleSheet("color: #888; font-size: 14px; font-weight: 800; letter-spacing: 1px; margin-bottom: 10px; border:none; background:transparent;")
+        lbl_head.setAlignment(Qt.AlignCenter)
+        layout.addWidget(lbl_head)
+
+        # Izgara (Grid) Yapısı
+        self.change_grid_widget = QWidget()
+        self.change_grid = QGridLayout(self.change_grid_widget)
+        self.change_grid.setContentsMargins(0, 0, 0, 0)
+        self.change_grid.setHorizontalSpacing(10) 
+        
+        # --- BURASI ÖNEMLİ: Satır aralığını açıyoruz ---
+        self.change_grid.setVerticalSpacing(12) 
+        # -----------------------------------------------
+        
+        self.change_labels = {} 
+        self.denominations = [1000, 900, 800, 700, 600, 500, 400, 300, 200, 100, 50]
+
+        for i, amount in enumerate(self.denominations):
+            # Yazı boyutlarını (font-size) artırdık:
+            
+            # 1. Sütun
+            lbl_denom = QLabel(f"{amount}")
+            lbl_denom.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            # font-size: 20px yaptık
+            lbl_denom.setStyleSheet("color: #cccccc; font-size: 20px; font-weight: bold; border:none; background:transparent; font-family: 'Consolas', monospace;")
+            
+            # 2. Sütun
+            lbl_arrow = QLabel("➔")
+            lbl_arrow.setAlignment(Qt.AlignCenter)
+            lbl_arrow.setStyleSheet("color: #555555; font-size: 16px; border:none; background:transparent;")
+            
+            # 3. Sütun
+            lbl_res = QLabel("---")
+            lbl_res.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            # font-size: 22px yaptık
+            lbl_res.setProperty("class", "ChangeResultError")
+            # Varsayılan stil (başlangıç için)
+            lbl_res.setStyleSheet("color: #444; font-size: 22px; font-weight: bold; border:none; background:transparent; font-family: 'Consolas', monospace;")
+            
+            self.change_grid.addWidget(lbl_denom, i, 0)
+            self.change_grid.addWidget(lbl_arrow, i, 1)
+            self.change_grid.addWidget(lbl_res, i, 2)
+            
+            self.change_labels[amount] = lbl_res
+
+        layout.addWidget(self.change_grid_widget)
+        layout.addStretch() # Altta boşluk bırakıp listeyi yukarı it
+        return frame
+
+    def update_change_list(self):
+        """Sepet toplamına göre listedeki rakamları günceller"""
+        if not self.cart_data:
+            total = 0.0
+        else:
+            total = sum([item['price'] * item['qty'] for item in self.cart_data])
+
+        for amount in self.denominations:
+            label = self.change_labels.get(amount)
+            if not label: continue
+
+            if total > 0 and amount >= total:
+                diff = amount - total
+                label.setText(f"{diff:.2f}")
+                label.setProperty("class", "ChangeResult")
+            else:
+                label.setText("---")
+                label.setProperty("class", "ChangeResultError")
+            
+            label.style().unpolish(label)
+            label.style().polish(label)
+
     def refresh_ui(self):
         """UI Yenileme"""
         self.search_bar.clear()
@@ -1232,12 +1647,9 @@ class NexusPOS(QMainWindow):
                 widget.deleteLater()
 
     def load_products_grid(self, category_name):
-        """Seçilen kategorideki ürünleri getirir"""
         self.clear_selection_area()
-        
-        # Grid ayarlarını ürünler için düzenle
         self.selection_lay.setAlignment(Qt.AlignTop)
-        
+        self.selection_scroll.setStyleSheet("border: none; background: transparent;") 
         # --- Geri Dön Butonu ---
         btn_back = QPushButton(f"⬅ {category_name} (Geri Dön)")
         btn_back.setFixedHeight(40)
@@ -1282,33 +1694,39 @@ class NexusPOS(QMainWindow):
     def load_categories_grid(self):
         self.clear_selection_area()
         
-        # Ana hizalamayı yukarı sabitle
-        self.selection_lay.setAlignment(Qt.AlignTop)
-        self.selection_lay.setSpacing(10)
+        # ANA LAYOUT AYARLARI
+        self.selection_lay.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.selection_lay.setSpacing(0)
+        self.selection_lay.setContentsMargins(0, 0, 0, 0)
+        
+        self.selection_scroll.setMaximumHeight(16777215)
+        self.selection_scroll.setWidgetResizable(True)
 
-        # Temizlik: Satır esnemelerini sıfırla
-        for r in range(self.selection_lay.rowCount()):
-            self.selection_lay.setRowStretch(r, 0)
-
-        # ==========================================
-        # SATIR 0: KATEGORİ BAŞLIĞI
-        # ==========================================
+        # 1. KATEGORİ BAŞLIĞI
         lbl_cat = QLabel("KATEGORİLER")
-        lbl_cat.setStyleSheet("color: #0a84ff; font-weight: 800; font-size: 14px; margin-left: 5px;")
-        self.selection_lay.addWidget(lbl_cat, 0, 0)
+        lbl_cat.setStyleSheet("color: #0a84ff; font-weight: 800; font-size: 14px; margin: 10px 0 5px 10px;")
+        self.selection_lay.addWidget(lbl_cat, 0, 0, 1, 3)
 
-        # ==========================================
-        # SATIR 1: KATEGORİ IZGARASI (3 SÜTUNLU)
-        # ==========================================
+        # 2. KATEGORİ SCROLL (SABİT YÜKSEKLİK)
+        cat_scroll = QScrollArea()
+        cat_scroll.setFixedHeight(250)
+        cat_scroll.setWidgetResizable(True)
+        cat_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        cat_scroll.setStyleSheet("""
+            QScrollArea { border: none; background: transparent; }
+            QScrollBar:vertical { background: #121212; width: 0px; } /* Scrollbar'ı gizledik */
+        """)
+        
         cat_container = QWidget()
+        cat_container.setStyleSheet("background: transparent;")
         cat_grid = QGridLayout(cat_container)
-        cat_grid.setContentsMargins(0, 5, 0, 5)
+        cat_grid.setContentsMargins(5, 0, 5, 0) 
         cat_grid.setSpacing(10)
-        cat_grid.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        cat_grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
 
+        # KARTLARI DİZME
         categories = self.db.get_all_categories()
         
-        # "Tüm Ürünler" Butonu
         def show_all():
             self.load_products_grid("Tüm Ürünler")
             
@@ -1316,15 +1734,14 @@ class NexusPOS(QMainWindow):
         all_card.setStyleSheet(all_card.styleSheet() + "QFrame { border: 1px dashed #555; }")
         cat_grid.addWidget(all_card, 0, 0)
 
-        # Diğer Kategoriler
         c_row = 0
         c_col = 1 
-        max_cat_col = 3 # KATEGORİLER 3 YAN YANA
+        max_cat_col = 3 
 
         for cat in categories:
             if cat == "Tüm Ürünler": continue
-            
-            card = CategoryCard(cat, self.load_products_grid)
+            # CategoryCard'ı parametrelerle çağırıyoruz
+            card = CategoryCard(cat, self.load_products_grid, is_add_button=False, db_manager=self.db, refresh_cb=self.refresh_ui)
             cat_grid.addWidget(card, c_row, c_col)
             
             c_col += 1
@@ -1332,46 +1749,42 @@ class NexusPOS(QMainWindow):
                 c_col = 0
                 c_row += 1
         
-        self.selection_lay.addWidget(cat_container, 1, 0)
+        # (+) Yeni Kategori Butonu
+        def trigger_add_cat(_):
+            self.add_category()
+            
+        add_card = CategoryCard("Yeni Kategori", trigger_add_cat, is_add_button=True)
+        cat_grid.addWidget(add_card, c_row, c_col)
 
-        # ==========================================
-        # SATIR 2: ARA ÇİZGİ
-        # ==========================================
+        cat_scroll.setWidget(cat_container)
+        self.selection_lay.addWidget(cat_scroll, 1, 0, 1, 3)
+
+        # 3. ARA ÇİZGİ
         line = QFrame()
         line.setFrameShape(QFrame.HLine)
-        line.setStyleSheet("background-color: #333; margin-top: 15px; margin-bottom: 15px;")
-        self.selection_lay.addWidget(line, 2, 0)
+        line.setStyleSheet("background-color: #333; margin: 15px 0;")
+        self.selection_lay.addWidget(line, 2, 0, 1, 3)
 
-        # ==========================================
-        # SATIR 3: HIZLI ERİŞİM BAŞLIĞI
-        # ==========================================
+        # 4. HIZLI ERİŞİM
         lbl_fav = QLabel("HIZLI ERİŞİM")
-        lbl_fav.setStyleSheet("color: #ffcc00; font-weight: 800; font-size: 14px; margin-left: 5px;")
-        self.selection_lay.addWidget(lbl_fav, 3, 0)
+        lbl_fav.setStyleSheet("color: #ffcc00; font-weight: 800; font-size: 14px; margin-left: 10px;")
+        self.selection_lay.addWidget(lbl_fav, 3, 0, 1, 3)
 
-        # ==========================================
-        # SATIR 4: HIZLI ERİŞİM IZGARASI (4 SÜTUNLU)
-        # ==========================================
         fav_container = QWidget()
         fav_grid = QGridLayout(fav_container)
-        fav_grid.setContentsMargins(0, 5, 0, 5)
+        fav_grid.setContentsMargins(5, 5, 5, 5)
         fav_grid.setSpacing(10)
-        fav_grid.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        fav_grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
 
         favorites = self.db.get_favorites()
-        
         if favorites:
             f_row = 0
             f_col = 0
-            max_fav_col = 4 # HIZLI ERİŞİM 4 YAN YANA
-
+            max_fav_col = 4 
+            
             for pid, name, price, img, fav, stock in favorites:
-                def on_click(n, p):
-                    self.add_to_cart(n, p)
-                
-                card = ProductCard(pid, name, price, img, fav, stock, on_click, self.refresh_ui, self.db, is_mini=True)
-                card.setFixedSize(130, 150)
-                
+                card = ProductCard(pid, name, price, img, fav, stock, self.add_to_cart, self.refresh_ui, self.db, is_mini=True)
+                card.setFixedSize(120, 150)
                 fav_grid.addWidget(card, f_row, f_col)
                 
                 f_col += 1
@@ -1379,19 +1792,14 @@ class NexusPOS(QMainWindow):
                     f_col = 0
                     f_row += 1
             
-            self.selection_lay.addWidget(fav_container, 4, 0)
+            self.selection_lay.addWidget(fav_container, 4, 0, 1, 3)
         else:
             lbl_empty = QLabel("Henüz favori ürün yok.")
             lbl_empty.setStyleSheet("color: #555; font-style: italic; margin-left: 10px;")
-            self.selection_lay.addWidget(lbl_empty, 4, 0)
+            self.selection_lay.addWidget(lbl_empty, 4, 0, 1, 3)
 
-        # ==========================================
-        # SATIR 5: BOŞLUK DOLDURUCU (SPACER)
-        # ==========================================
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Expanding)
-        
-        # HATA BURADAYDI: 'row' yerine '5' yazdık.
         self.selection_lay.addWidget(spacer, 5, 0)
         self.selection_lay.setRowStretch(5, 1)
 
@@ -1598,6 +2006,9 @@ class NexusPOS(QMainWindow):
         # Genel Toplam Etiketini Güncelle
         self.lbl_total.setText(f"{total:.2f} ₺")
 
+        if hasattr(self, 'change_labels'):
+            self.update_change_list()
+
     def row_selected(self):
         self.selected_row = self.table.currentRow()
 
@@ -1715,6 +2126,89 @@ class NexusPOS(QMainWindow):
         self.worker = PaymentWorker(total)
         self.worker.finished.connect(self.on_pos_result)
         self.worker.start()
+    def add_customer_tab(self, name):
+        tab = CustomerCartTab()
+        tab.totalChanged.connect(self.update_total_display)
+        self.cart_tabs.addTab(tab, name)
+
+    def get_current_cart(self):
+        """Aktif sekmedeki sepeti döndürür"""
+        return self.cart_tabs.currentWidget()
+
+    def add_to_cart(self, name, price):
+        """Seçilen ürünü aktif sekmeye ekler"""
+        cart = self.get_current_cart()
+        if cart:
+            cart.add_item(name, price)
+
+    def update_total_display(self, total):
+        """Aktif sekmenin toplamı değişince çalışır"""
+        # Sadece o anki görünen sekme ise güncelle
+        if self.sender() == self.get_current_cart():
+            self.lbl_total.setText(f"{total:.2f} ₺")
+            self.update_change_list()
+    
+    # Sekme değiştiğinde toplamı güncelle
+    def on_tab_changed(self):
+        cart = self.get_current_cart()
+        if cart:
+            # Mevcut tablodan toplamı hesapla
+            cart.recalc_total() 
+
+    def numpad_action(self, key):
+        """Numpad tıklamalarını aktif sepetin seçili satırına yönlendir"""
+        cart = self.get_current_cart()
+        if not cart: return
+        
+        row = cart.table.currentRow()
+        if row < 0: return # Seçili satır yok
+        
+        current_qty_item = cart.table.item(row, 2)
+        try:
+            current_val = int(current_qty_item.text())
+        except:
+            current_val = 1
+            
+        new_val = current_val
+        
+        if key == 'C':
+            cart.table.removeRow(row)
+        elif key == '⌫':
+             # Numpad ile silme (Backsapce) sadece rakam siler, satır silmez
+            s_val = str(current_val)
+            if len(s_val) > 1:
+                new_val = int(s_val[:-1])
+            else:
+                new_val = 1
+            cart.update_row_qty(row, new_val)
+        else:
+            # Rakam ekleme
+            # Eğer şu an 1 ise ve biz rakama basıyorsak (örn 5), direkt 5 olsun. 15 olmasın.
+            if current_val == 1:
+                new_val = int(key)
+            else:
+                new_val = int(str(current_val) + key)
+            cart.update_row_qty(row, new_val)
+
+    def finish_sale(self, method):
+        cart = self.get_current_cart()
+        if not cart or not cart.cart_data: return
+        
+        total = sum([x['price'] * x['qty'] for x in cart.cart_data])
+        
+        try:
+            # Satışı kaydet
+            alerts = self.db.record_sale(cart.cart_data, total, method)
+            if alerts: QMessageBox.warning(self, "Stok Uyarısı", "\n".join(alerts))
+            
+            # Sepeti Temizle (Satırları sil)
+            cart.table.setRowCount(0)
+            cart.recalc_total()
+            
+            self.update_ciro()
+            QMessageBox.information(self, "Başarılı", f"{method} satışı tamamlandı!")
+        except Exception as e:
+            QMessageBox.critical(self, "Hata", str(e))
 
     def on_pos_result(self, result):
        self.pd.close()
@@ -1759,40 +2253,254 @@ class NexusPOS(QMainWindow):
 # YÖNETİM PANELİ
 # ==========================================
 class AdminDialog(QDialog):
+    # AdminDialog sınıfının __init__ metodunu şu şekilde sadeleştirin:
     def __init__(self, db, parent=None):
         super().__init__(parent)
         self.db = db
         self.setWindowTitle("Yönetim Paneli")
-        self.resize(1000, 800)
+        self.resize(1200, 800) # Biraz daha genişletelim
         self.setStyleSheet("background:#1a1a1a; color:white;")
         
         layout = QVBoxLayout(self)
         
         # Sekmeler
         self.tabs = QTabWidget()
-        self.tabs.currentChanged.connect(self.on_tab_change)
+        # Sekme değişince veriyi yükle diyeceğiz
+        self.tabs.currentChanged.connect(self.on_tab_change) 
         layout.addWidget(self.tabs)
         
         self.editing_pid = None
         self.filter_mode = 'day'
         self.last_tab_index = 0
         
-        # --- SEKMELERİ KUR ---
-        self.setup_finances()             # 1. Finansal Rapor
-        self.setup_sales_history()        # 2. Satış Geçmişi
-        self.setup_prod_list()            # 3. Ürün Listesi
-        self.setup_add_prod()             # 4. Ürün Ekle
-        self.setup_stock_tracking()       # 5. Stok Takip
-        self.setup_pending_transactions() # 6. Bekleyen İşlemler (EKSİK OLAN BUYDU)
-        self.setup_bulk_operations()      # 7. Toplu İşlemler
+        # ARAYÜZLERİ KURUYORUZ AMA VERİLERİ HENÜZ YÜKLEMİYORUZ!
+        self.setup_finances()             # Tab 0
+        self.setup_sales_history()        # Tab 1
+        self.setup_prod_list()            # Tab 2
+        self.setup_add_prod()             # Tab 3
+        self.setup_stock_tracking()       # Tab 4
+        self.setup_pending_transactions() # Tab 5
+        self.setup_bulk_operations()      # Tab 6
+
+        # Sadece İLK sekmenin verisini yükle (Program açılınca donmasın)
+        self.load_finance_data()
+
+    # AdminDialog sınıfının içine (en alta) ekleyin:
+
+    def load_product_to_form(self, pid):
+        """Seçilen ürünü düzenleme formuna yükler"""
+        product = self.db.get_product_by_id(pid)
+        if not product:
+            QMessageBox.warning(self, "Hata", "Ürün bulunamadı!")
+            return
+            
+        # product yapısı: (id, name, cost, sell, stock, critical, cat, barcode, img, sort)
+        # Veritabanı sütun sırasına göre indexler değişebilir, kontrol edelim:
+        # Genelde: 0:id, 1:name, 2:cost, 3:sell, 4:stock, 5:crit, 6:cat, 7:barcode...
+        
+        self.editing_pid = product[0] # Düzenleme moduna al
+        
+        self.inp_name.setText(product[1])
+        self.inp_cost.setText(str(product[2]))
+        self.inp_sell.setText(str(product[3]))
+        self.inp_stok.setText(str(product[4]))
+        self.inp_crit.setText(str(product[5] if product[5] is not None else 5))
+        self.cmb_cat.setCurrentText(product[6])
+        self.inp_code.setText(product[7] if product[7] else "")
+        
+        # UI Güncellemesi
+        self.lbl_form_title.setText(f"ÜRÜN DÜZENLE (ID: {self.editing_pid})")
+        self.lbl_form_title.setStyleSheet("font-size: 22px; font-weight: bold; color: #ff9f0a;") # Turuncu başlık
+        
+        self.btn_save.setText("GÜNCELLE")
+        self.btn_save.setStyleSheet("""
+            QPushButton { background-color: #ff9f0a; color: black; font-weight: bold; font-size: 16px; border-radius: 10px; }
+            QPushButton:hover { background-color: #e08e0b; }
+        """)
+        
+        # Sekmeyi "Ürün Ekle / Düzenle"ye (Index 3) kaydır
+        self.tabs.setCurrentIndex(3)
+
+    def load_stock_categories(self):
+        """Stok takibi için kategori butonlarını yükler"""
+        # Önce eski butonları temizle
+        while self.cat_btn_layout.count():
+            child = self.cat_btn_layout.takeAt(0)
+            if child.widget(): child.widget().deleteLater()
+            
+        categories = self.db.get_all_categories()
+        
+        row, col = 0, 0
+        max_col = 4 # Yan yana 4 buton
+        
+        for cat in categories:
+            if cat == "Tüm Ürünler": continue # "Tüm Ürünler" çok kasacağı için stokta göstermeyelim veya sona ekleyelim
+            
+            btn = QPushButton(cat)
+            btn.setFixedSize(200, 100)
+            btn.setCursor(Qt.PointingHandCursor)
+            # Modern Kart Görünümlü Buton
+            btn.setStyleSheet("""
+                QPushButton { 
+                    background-color: #252525; 
+                    color: white; 
+                    border: 1px solid #444; 
+                    border-radius: 12px; 
+                    font-size: 16px; 
+                    font-weight: bold; 
+                }
+                QPushButton:hover { 
+                    background-color: #303030; 
+                    border: 1px solid #0a84ff; 
+                    color: #0a84ff;
+                }
+            """)
+            
+            # Butona tıklayınca o kategoriyi aç
+            btn.clicked.connect(lambda _, c=cat: self.load_stock_products_by_cat(c))
+            
+            self.cat_btn_layout.addWidget(btn, row, col)
+            
+            col += 1
+            if col >= max_col:
+                col = 0
+                row += 1
+        
+        # En sona boşluk atıp yukarı itelim
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Expanding)
+        self.cat_btn_layout.addWidget(spacer, row + 1, 0)
+        self.cat_btn_layout.setRowStretch(row + 1, 1)
+
+    def load_stock_products_by_cat(self, category_name):
+        """Seçilen kategorideki ürünleri stok tablosuna yükler"""
+        self.lbl_selected_cat.setText(f"Kategori: {category_name}")
+        self.stock_table.setRowCount(0)
+        
+        # Sadece o kategorinin ürünlerini çekiyoruz (HIZLI ÇALIŞIR)
+        products = self.db.get_products(category_name)
+        
+        self.stock_table.setSortingEnabled(False) # Hız için kapat
+        
+        for i, (pid, name, price, img, fav, stock) in enumerate(products):
+            self.stock_table.insertRow(i)
+            self.stock_table.setItem(i, 0, QTableWidgetItem(str(pid)))
+            self.stock_table.setItem(i, 1, QTableWidgetItem(name))
+            
+            stock_item = QTableWidgetItem()
+            stock_item.setData(Qt.DisplayRole, stock)
+            self.stock_table.setItem(i, 2, stock_item)
+            
+            btn = QPushButton("Düzenle")
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setStyleSheet("background-color: #0a84ff; color: white; border-radius: 4px; font-weight: bold;")
+            
+            # Güncelleme sonrası tabloyu yenilemek için fonksiyonu güncelledik
+            btn.clicked.connect(lambda _, p=pid, s=stock, c=category_name: self.update_stock_filtered(p, s, c))
+            
+            self.stock_table.setCellWidget(i, 3, btn)
+            
+        self.stock_table.setSortingEnabled(True)
+        
+        # Sayfayı değiştir (Tabloyu göster)
+        self.stk_stock.setCurrentIndex(1)
+
+    def update_stock_filtered(self, pid, current_stock, category_name):
+        """Stok günceller ve aynı kategori sayfasında kalır"""
+        val, ok = QInputDialog.getInt(self, "Stok Güncelle", "Yeni Stok Adedi:", current_stock, -1000, 100000, 1)
+        if ok: 
+            self.db.update_product_field(pid, "stock", val)
+            # Sadece mevcut kategoriyi yenile, hepsini değil
+            self.load_stock_products_by_cat(category_name)
+            QMessageBox.information(self, "Başarılı", "Stok güncellendi.")
+
+    def export_csv(self):
+        # Dosya kaydetme penceresi aç
+        path, _ = QFileDialog.getSaveFileName(self, "CSV Olarak Kaydet", "urunler.csv", "CSV Dosyaları (*.csv)")
+        if path:
+            success, msg = self.db.export_products_to_csv(path)
+            if success:
+                QMessageBox.information(self, "Başarılı", msg)
+            else:
+                QMessageBox.critical(self, "Hata", msg)
+
+    def import_csv(self):
+        # Dosya açma penceresi aç
+        path, _ = QFileDialog.getOpenFileName(self, "CSV Dosyası Seç", "", "CSV Dosyaları (*.csv)")
+        if path:
+            reply = QMessageBox.question(self, "Onay", "Veritabanı bu dosyadan güncellenecek.\nBu işlem geri alınamaz!\nDevam edilsin mi?", QMessageBox.Yes | QMessageBox.No)
+            if reply == QMessageBox.Yes:
+                success, msg = self.db.import_products_from_csv(path)
+                if success:
+                    QMessageBox.information(self, "Başarılı", msg)
+                    # Listeyi yenile ki değişiklikleri görelim
+                    if hasattr(self, 'load_table_data'):
+                        self.load_table_data() 
+                else:
+                    QMessageBox.critical(self, "Hata", msg)
+
+    def take_z_report(self):
+        reply = QMessageBox.question(self, "Z Raporu", "Günü bitirip Z Raporu almak istiyor musunuz?\nBu işlem bugünkü satışları dosyalayacaktır.", QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.No: return
+        
+        # 1. Klasörü Oluştur
+        if not os.path.exists("z_reports"):
+            os.makedirs("z_reports")
+            
+        # 2. Dosya Adı (Örn: 27012026.json)
+        now = datetime.datetime.now()
+        filename = f"z_reports/{now.strftime('%d%m%Y')}.json"
+        
+        # 3. Verileri Topla
+        sales = self.db.get_todays_sales()
+        totals = self.db.get_todays_totals() # (Total Ciro, Total Kâr)
+        
+        report_data = {
+            "date": now.strftime('%d-%m-%Y'),
+            "generated_at": now.strftime('%H:%M:%S'),
+            "total_turnover": totals[0] if totals[0] else 0,
+            "total_profit": totals[1] if totals[1] else 0,
+            "transaction_count": len(sales),
+            "transactions": []
+        }
+        
+        for s in sales:
+            report_data["transactions"].append({
+                "id": s[0],
+                "time": s[3],
+                "receipt": s[1],
+                "amount": s[5],
+                "method": s[4]
+            })
+            
+        # 4. Dosyaya Yaz
+        try:
+            with open(filename, 'w', encoding='utf-8') as f:
+                json.dump(report_data, f, ensure_ascii=False, indent=4)
+            
+            QMessageBox.information(self, "Başarılı", f"Z Raporu alındı ve kaydedildi:\n{filename}")
+            
+            # Ekranı temizlemeye gerek yok çünkü tarih değişince otomatik boş gelecek.
+            # Ama kullanıcı temiz görmek istiyorsa:
+            # self.hist_table.setRowCount(0) 
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Hata", f"Rapor kaydedilemedi: {str(e)}")
 
     def on_tab_change(self, index):
         self.last_tab_index = index
-        # 4. İndeks (Stok Takip) ise verileri yenile
-        if index == 4: 
-            self.load_stock_data()
-        # 5. İndeks (Bekleyenler) ise yenile
-        elif index == 5:
+        
+        if index == 0:   # Finansal
+            self.load_finance_data()
+        elif index == 1: # Satış
+            self.load_sales_history_data()
+        elif index == 2: # Ürün Listesi
+            self.load_table_data()
+        elif index == 4: # STOK TAKİP (BURAYI DEĞİŞTİRDİK)
+            # Tabloyu sıfırla ve kategorileri yükle
+            self.stk_stock.setCurrentIndex(0) 
+            self.load_stock_categories()
+        elif index == 5: # Bekleyen
             self.load_pending_data()
 
     # --- 1. FİNANSAL RAPORLAR ---
@@ -1874,7 +2582,6 @@ class AdminDialog(QDialog):
         
         l.addWidget(self.fin_table, stretch=2)
         
-        self.load_finance_data()
         self.tabs.addTab(w, "Finansal Rapor")
 
     def change_filter(self, btn):
@@ -1944,34 +2651,48 @@ class AdminDialog(QDialog):
         w = QWidget()
         l = QVBoxLayout(w)
         
+        # Üst Bar: Başlık ve Z Raporu Butonu
+        top_lay = QHBoxLayout()
+        top_lay.addWidget(QLabel("GÜNLÜK SATIŞ GEÇMİŞİ (Sadece Bugün)", styleSheet="font-weight:bold; color:#0a84ff; font-size:16px;"))
+        top_lay.addStretch()
+        
+        btn_z_report = QPushButton("Z RAPORU AL (Günü Bitir)")
+        btn_z_report.setStyleSheet("background-color: #ff453a; color: white; font-weight: bold; padding: 10px; border-radius: 8px;")
+        btn_z_report.clicked.connect(self.take_z_report)
+        top_lay.addWidget(btn_z_report)
+        
+        l.addLayout(top_lay)
+        
         self.hist_table = QTableWidget()
         self.hist_table.setColumnCount(6)
-        self.hist_table.setHorizontalHeaderLabels(["ID", "Tarih/Saat", "Fiş No", "Satış İçeriği", "Ödeme", "Tutar"])
+        self.hist_table.setHorizontalHeaderLabels(["ID", "Saat", "Fiş No", "İçerik", "Ödeme", "Tutar"])
         self.hist_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.hist_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         
         self.hist_table.setStyleSheet("QTableWidget { background:#252525; border:none; }")
         self.hist_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.hist_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.hist_table.doubleClicked.connect(self.show_receipt_detail)
         
-        data = self.db.get_sales_history_extended()
+        l.addWidget(self.hist_table)
+        self.tabs.addTab(w, "Günlük Satışlar / Z Raporu")
+
+    def load_sales_history_data(self):
+        # Sadece BUGÜNÜN verilerini çek
+        data = self.db.get_todays_sales()
+        
         self.hist_table.setRowCount(0)
         for r_idx, row in enumerate(data):
             self.hist_table.insertRow(r_idx)
             self.hist_table.setItem(r_idx, 0, QTableWidgetItem(str(row[0])))
-            self.hist_table.setItem(r_idx, 1, QTableWidgetItem(str(row[3])))
+            # Timestamp'ten sadece saati al (Örn: 2026-01-27 12:30:00 -> 12:30:00)
+            time_part = row[3].split(' ')[1] if ' ' in row[3] else row[3]
+            self.hist_table.setItem(r_idx, 1, QTableWidgetItem(str(time_part)))
+            
             self.hist_table.setItem(r_idx, 2, QTableWidgetItem(str(row[1])))
-            
-            prod_info = str(row[6]) if row[6] else "Ürün Yok"
+            prod_info = str(row[6]) if row[6] else "..."
             self.hist_table.setItem(r_idx, 3, QTableWidgetItem(f"{prod_info}..."))
-            
             self.hist_table.setItem(r_idx, 4, QTableWidgetItem(str(row[4])))
             self.hist_table.setItem(r_idx, 5, QTableWidgetItem(f"{row[5]:.2f} ₺"))
-            
-        l.addWidget(self.hist_table)
-        l.addWidget(QLabel("* Fiş detayını görmek için satıra çift tıklayın."))
-        self.tabs.addTab(w, "Satış Geçmişi")
 
     def show_receipt_detail(self):
         r = self.hist_table.currentRow()
@@ -1981,6 +2702,8 @@ class AdminDialog(QDialog):
             dlg.exec()
 
     # --- 3. ÜRÜN LİSTESİ ---
+    # AdminDialog sınıfı içine:
+    
     def setup_prod_list(self):
         w = QWidget()
         l = QVBoxLayout(w)
@@ -1997,16 +2720,24 @@ class AdminDialog(QDialog):
         l.addLayout(h)
         
         self.table = QTableWidget()
-        self.table.setColumnCount(6)
-        self.table.setHorizontalHeaderLabels(["ID", "AD", "FİYAT", "STOK", "BARKOD", "KRİTİK"])
+        self.table.setColumnCount(7) # ID, AD, FİYAT, STOK, BARKOD, KRİTİK, SİL
+        self.table.verticalHeader().setDefaultSectionSize(50)
+        self.table.setHorizontalHeaderLabels(["ID", "AD", "FİYAT", "STOK", "BARKOD", "KRİTİK", "İŞLEM"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.table.setStyleSheet("QTableWidget { background:#252525; border:none; gridline-color:#333; }")
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.table.doubleClicked.connect(self.start_edit)
+        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Fixed) # Sil butonu sabit
+        self.table.setColumnWidth(6, 100)
+        self.table.setStyleSheet("""
+            QTableWidget { background:#252525; border:none; gridline-color:#333; color: white; font-size:14px; }
+            QTableWidget::item { padding: 5px; }
+            QTableWidget::item:selected { background:#0a84ff; }
+            QLineEdit { background: #333; color: white; border: 1px solid #0a84ff; }
+        """)
+        
+        # --- Yerinde Düzenleme Sinyali ---
+        self.table.itemChanged.connect(self.on_prod_cell_changed)
         
         l.addWidget(self.table)
-        l.addWidget(QLabel("* Düzenlemek için çift tıklayın."))
+        l.addWidget(QLabel("* Hücrelere çift tıklayarak düzenleyebilirsiniz. 'Sil' butonu kalıcı olarak siler."))
         self.tabs.addTab(w, "Ürün Listesi")
         self.load_table_data()
 
@@ -2019,11 +2750,62 @@ class AdminDialog(QDialog):
             q = "SELECT id, name, sell_price, stock, barcode, critical_stock FROM products"
             data = self.db.cursor.execute(q).fetchall()
             
+        self.table.blockSignals(True) # Yüklerken sinyalleri kapat (döngüye girmesin)
         self.table.setRowCount(0)
+        
         for r_idx, row in enumerate(data):
             self.table.insertRow(r_idx)
-            for c_idx, val in enumerate(row):
-                self.table.setItem(r_idx, c_idx, QTableWidgetItem(str(val if val is not None else "")))
+            
+            # ID (Düzenlenemez)
+            item_id = QTableWidgetItem(str(row[0]))
+            item_id.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            self.table.setItem(r_idx, 0, item_id)
+            
+            # Diğer kolonlar (Düzenlenebilir)
+            for c_idx, val in enumerate(row[1:], 1): # 1'den başla çünkü ID'yi koyduk
+                item = QTableWidgetItem(str(val if val is not None else ""))
+                item.setFlags(item.flags() | Qt.ItemIsEditable)
+                self.table.setItem(r_idx, c_idx, item)
+            
+            # Sil Butonu
+            btn_del = QPushButton("SİL")
+            btn_del.setCursor(Qt.PointingHandCursor)
+            btn_del.setStyleSheet("background-color: #ff453a; color: white; font-weight: bold; border-radius: 4px;")
+            btn_del.clicked.connect(lambda _, pid=row[0]: self.delete_product(pid))
+            self.table.setCellWidget(r_idx, 6, btn_del)
+
+        self.table.blockSignals(False)
+
+    def on_prod_cell_changed(self, item):
+        """Yönetim panelindeki tablo hücresi değişince DB'yi güncelle"""
+        row = item.row()
+        col = item.column()
+        
+        try:
+            pid = int(self.table.item(row, 0).text())
+            new_val = item.text()
+            
+            field = ""
+            if col == 1: field = "name"
+            elif col == 2: field = "sell_price"
+            elif col == 3: field = "stock"
+            elif col == 4: field = "barcode"
+            elif col == 5: field = "critical_stock"
+            
+            if field:
+                # Sayısal alan kontrolü (Basitçe string gönderiyoruz, SQLite halleder ama temiz olsun)
+                self.db.update_product_field(pid, field, new_val)
+                print(f"Ürün {pid} güncellendi: {field} = {new_val}")
+                
+        except Exception as e:
+            print(f"Güncelleme Hatası: {e}")
+
+    def delete_product(self, pid):
+        reply = QMessageBox.question(self, "Onay", "Bu ürün kalıcı olarak silinecek!\nEmin misiniz?", QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            self.db.delete_product(pid)
+            self.load_table_data()
+            QMessageBox.information(self, "Silindi", "Ürün veritabanından silindi.")
 
     def start_edit(self):
         r = self.table.currentRow()
@@ -2047,131 +2829,222 @@ class AdminDialog(QDialog):
     # --- 4. ÜRÜN EKLEME / DÜZENLEME ---
     def setup_add_prod(self):
         w = QWidget()
-        l = QVBoxLayout(w)
-        l.setSpacing(15)
-        l.setContentsMargins(50, 30, 50, 30)
+        # Ana Layout (Ortalanmış ve Kenar Boşluklu)
+        main_layout = QVBoxLayout(w)
+        main_layout.setAlignment(Qt.AlignTop)
+        main_layout.setContentsMargins(50, 30, 50, 30)
+        main_layout.setSpacing(20)
         
-        l.addWidget(QLabel("YENİ ÜRÜN EKLE", styleSheet="font-size:18px; font-weight:bold; color:#0a84ff;"))
+        # Başlık
+        self.lbl_form_title = QLabel("YENİ ÜRÜN EKLE")
+        self.lbl_form_title.setStyleSheet("font-size: 22px; font-weight: bold; color: #0a84ff;")
+        main_layout.addWidget(self.lbl_form_title)
         
-        self.inp_name = QLineEdit(placeholderText="Ürün Adı")
-        self.inp_code = QLineEdit(placeholderText="Barkod")
+        # Form Container (Kutucuk içine alalım)
+        form_frame = QFrame()
+        form_frame.setStyleSheet("""
+            QFrame { background-color: #202020; border-radius: 15px; border: 1px solid #333; }
+            QLineEdit, QComboBox { 
+                background-color: #1a1a1a; color: white; border: 1px solid #444; 
+                padding: 10px; border-radius: 8px; font-size: 14px; 
+            }
+            QLineEdit:focus, QComboBox:focus { border: 1px solid #0a84ff; }
+        """)
+        form_layout = QVBoxLayout(form_frame)
+        form_layout.setContentsMargins(20, 20, 20, 20)
+        form_layout.setSpacing(15)
         
-        r1 = QHBoxLayout()
-        self.inp_cost = QLineEdit(placeholderText="Maliyet")
-        self.inp_sell = QLineEdit(placeholderText="Satış Fiyatı")
-        r1.addWidget(self.inp_cost)
-        r1.addWidget(self.inp_sell)
+        # --- Form Alanları ---
+        self.inp_code = QLineEdit()
+        self.inp_code.setPlaceholderText("Barkod (Okutunuz veya Yazınız)")
         
-        r2 = QHBoxLayout()
-        self.inp_stok = QLineEdit(placeholderText="Stok")
-        self.inp_crit = QLineEdit(placeholderText="Kritik Stok")
-        r2.addWidget(self.inp_stok)
-        r2.addWidget(self.inp_crit)
+        self.inp_name = QLineEdit()
+        self.inp_name.setPlaceholderText("Ürün Adı")
         
+        # Yan Yana Alanlar (Maliyet - Satış)
+        row1 = QHBoxLayout()
+        self.inp_cost = QLineEdit()
+        self.inp_cost.setPlaceholderText("Maliyet Fiyatı (₺)")
+        self.inp_sell = QLineEdit()
+        self.inp_sell.setPlaceholderText("Satış Fiyatı (₺)")
+        row1.addWidget(self.inp_cost)
+        row1.addWidget(self.inp_sell)
+        
+        # Yan Yana Alanlar (Stok - Kritik Stok)
+        row2 = QHBoxLayout()
+        self.inp_stok = QLineEdit()
+        self.inp_stok.setPlaceholderText("Stok Adedi")
+        self.inp_crit = QLineEdit()
+        self.inp_crit.setPlaceholderText("Kritik Stok Uyarı Limiti")
+        row2.addWidget(self.inp_stok)
+        row2.addWidget(self.inp_crit)
+        
+        # Kategori Seçimi
         self.cmb_cat = QComboBox()
         self.cmb_cat.addItems(self.db.get_all_categories())
-        self.cmb_cat.setStyleSheet("padding:10px; border:1px solid #404040; border-radius:8px; background:#252525; color:white;")
+        
+        # Form elemanlarını ekle
+        form_layout.addWidget(QLabel("Barkod:", styleSheet="border:none; color:#888; font-size:12px; margin-bottom:-5px;"))
+        form_layout.addWidget(self.inp_code)
+        
+        form_layout.addWidget(QLabel("Ürün Adı:", styleSheet="border:none; color:#888; font-size:12px; margin-bottom:-5px;"))
+        form_layout.addWidget(self.inp_name)
+        
+        form_layout.addLayout(row1)
+        form_layout.addLayout(row2)
+        
+        form_layout.addWidget(QLabel("Kategori:", styleSheet="border:none; color:#888; font-size:12px; margin-bottom:-5px;"))
+        form_layout.addWidget(self.cmb_cat)
+        
+        main_layout.addWidget(form_frame)
+        
+        # --- Butonlar ---
+        btn_layout = QHBoxLayout()
         
         self.btn_save = QPushButton("KAYDET")
         self.btn_save.setFixedHeight(50)
-        self.btn_save.setStyleSheet("background:#30d158; color:black; font-weight:bold; border-radius:10px; font-size:16px;")
+        self.btn_save.setCursor(Qt.PointingHandCursor)
+        self.btn_save.setStyleSheet("""
+            QPushButton { background-color: #30d158; color: black; font-weight: bold; font-size: 16px; border-radius: 10px; }
+            QPushButton:hover { background-color: #28b84d; }
+        """)
         self.btn_save.clicked.connect(self.save_product)
         
-        btn_clear = QPushButton("Temizle")
-        btn_clear.setStyleSheet("color:#ff453a; background:transparent;")
+        btn_clear = QPushButton("Temizle / Yeni")
+        btn_clear.setFixedHeight(50)
+        btn_clear.setCursor(Qt.PointingHandCursor)
+        btn_clear.setStyleSheet("""
+            QPushButton { background-color: transparent; color: #ff453a; font-weight: bold; font-size: 14px; border: 1px solid #ff453a; border-radius: 10px; }
+            QPushButton:hover { background-color: rgba(255, 69, 58, 0.1); }
+        """)
         btn_clear.clicked.connect(self.clear_form)
         
-        l.addWidget(self.inp_code)
-        l.addWidget(self.inp_name)
-        l.addLayout(r1)
-        l.addLayout(r2)
-        l.addWidget(self.cmb_cat)
-        l.addWidget(self.btn_save)
-        l.addWidget(btn_clear)
-        l.addStretch()
+        btn_layout.addWidget(self.btn_save, stretch=2)
+        btn_layout.addWidget(btn_clear, stretch=1)
+        
+        main_layout.addLayout(btn_layout)
+        main_layout.addStretch()
         
         self.tabs.addTab(w, "Ürün Ekle / Düzenle")
 
     def save_product(self):
-        inputs = [self.inp_name, self.inp_code, self.inp_cost, self.inp_sell, self.inp_stok]
-        error = False
+        # 1. Validasyon
+        name = self.inp_name.text().strip()
+        barcode = self.inp_code.text().strip()
         
-        for i in inputs: 
-            if not i.text().strip(): 
-                i.setProperty("class", "Error")
-                i.style().unpolish(i)
-                i.style().polish(i)
-                error = True
-            else: 
-                i.setProperty("class", "")
-                i.style().unpolish(i)
-                i.style().polish(i)
-        
-        if error: 
-            QMessageBox.warning(self, "Hata", "Zorunlu alanları doldurun!")
+        if not name or not self.inp_sell.text():
+            QMessageBox.warning(self, "Hata", "Ürün Adı ve Satış Fiyatı zorunludur!")
             return
-        
+
         try:
+            cost = float(self.inp_cost.text()) if self.inp_cost.text() else 0.0
+            sell = float(self.inp_sell.text())
+            stock = int(self.inp_stok.text()) if self.inp_stok.text() else 0
             crit = int(self.inp_crit.text()) if self.inp_crit.text() else 5
+            category = self.cmb_cat.currentText()
             
+            # 2. Güncelleme mi, Yeni Kayıt mı?
             if self.editing_pid:
+                # GÜNCELLEME
                 self.db.update_product_fully(
-                    self.editing_pid, 
-                    self.inp_name.text(), 
-                    float(self.inp_cost.text()), 
-                    float(self.inp_sell.text()), 
-                    int(self.inp_stok.text()), 
-                    self.cmb_cat.currentText(), 
-                    self.inp_code.text(), 
-                    None, 
-                    crit
+                    self.editing_pid, name, cost, sell, stock, category, barcode, None, crit
                 )
-                QMessageBox.information(self, "Bilgi", "Güncellendi.")
+                QMessageBox.information(self, "Başarılı", "Ürün başarıyla güncellendi.")
             else:
-                if self.db.get_product_by_barcode(self.inp_code.text()): 
-                    QMessageBox.warning(self, "Hata", "Barkod kullanılıyor!")
-                    return
-                    
+                # YENİ KAYIT
+                # Barkod kontrolü (Aynı barkod var mı?)
+                if barcode and self.db.get_product_by_barcode(barcode):
+                     QMessageBox.warning(self, "Hata", "Bu barkod zaten kullanılıyor!")
+                     return
+                     
                 self.db.insert_product(
-                    self.inp_name.text(), 
-                    float(self.inp_cost.text()), 
-                    float(self.inp_sell.text()), 
-                    int(self.inp_stok.text()), 
-                    self.cmb_cat.currentText(), 
-                    self.inp_code.text(), 
-                    None, 
-                    crit
+                    name, cost, sell, stock, category, barcode, None, crit
                 )
-                QMessageBox.information(self, "Bilgi", "Eklendi.")
-            
+                QMessageBox.information(self, "Başarılı", "Yeni ürün eklendi.")
+
+            # 3. Formu Temizle ve Hazırla
             self.clear_form()
-            self.load_table_data()
-            self.load_stock_data()
             
-        except Exception as e: 
-            QMessageBox.critical(self, "Hata", str(e))
+        except ValueError:
+             QMessageBox.warning(self, "Hata", "Fiyat ve Stok alanlarına sadece sayı giriniz!")
+        except Exception as e:
+             QMessageBox.critical(self, "Hata", f"Kayıt hatası: {str(e)}")
 
     def clear_form(self):
+        """Formu temizler ve 'Yeni Kayıt' moduna geçirir"""
         self.editing_pid = None
-        self.inp_name.clear()
         self.inp_code.clear()
+        self.inp_name.clear()
         self.inp_cost.clear()
         self.inp_sell.clear()
         self.inp_stok.clear()
         self.inp_crit.clear()
-        self.btn_save.setText("KAYDET")
-        self.btn_save.setStyleSheet("background:#30d158; color:black; font-weight:bold; border-radius:10px; font-size:16px;")
         
-        for i in [self.inp_name, self.inp_code, self.inp_cost, self.inp_sell, self.inp_stok]: 
-            i.setProperty("class", "")
-            i.style().unpolish(i)
-            i.style().polish(i)
+        # Görünümü "Yeni Ekle" moduna çevir
+        self.lbl_form_title.setText("YENİ ÜRÜN EKLE")
+        self.lbl_form_title.setStyleSheet("font-size: 22px; font-weight: bold; color: #0a84ff;")
+        
+        self.btn_save.setText("KAYDET")
+        self.btn_save.setStyleSheet("""
+            QPushButton { background-color: #30d158; color: black; font-weight: bold; font-size: 16px; border-radius: 10px; }
+            QPushButton:hover { background-color: #28b84d; }
+        """)
 
     # --- 5. STOK TAKİP ---
     def setup_stock_tracking(self):
         w = QWidget()
-        l = QVBoxLayout(w)
+        main_layout = QVBoxLayout(w)
+        main_layout.setContentsMargins(0, 0, 0, 0)
         
+        # Sayfa Yöneticisi (Stacked Widget)
+        self.stk_stock = QStackedWidget()
+        
+        # --- SAYFA 1: KATEGORİ SEÇİMİ ---
+        self.page_stock_cats = QWidget()
+        l_cats = QVBoxLayout(self.page_stock_cats)
+        
+        lbl_info = QLabel("Lütfen Stok Düzenlemek İçin Bir Kategori Seçin")
+        lbl_info.setStyleSheet("font-size: 18px; font-weight: bold; color: #ffcc00; margin-bottom: 10px;")
+        lbl_info.setAlignment(Qt.AlignCenter)
+        l_cats.addWidget(lbl_info)
+        
+        # Kategori Butonları için Scroll Area (Kategori çoksa kaydırmak için)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("border: none; background: transparent;")
+        
+        self.cat_btn_container = QWidget()
+        self.cat_btn_layout = QGridLayout(self.cat_btn_container)
+        self.cat_btn_layout.setSpacing(15)
+        
+        scroll.setWidget(self.cat_btn_container)
+        l_cats.addWidget(scroll)
+        
+        # --- SAYFA 2: ÜRÜN TABLOSU ---
+        self.page_stock_table = QWidget()
+        l_table = QVBoxLayout(self.page_stock_table)
+        
+        # Üst Bar (Geri Dön Butonu ve Başlık)
+        top_bar = QHBoxLayout()
+        
+        btn_back = QPushButton("⬅ KATEGORİLERE DÖN")
+        btn_back.setFixedSize(200, 40)
+        btn_back.setCursor(Qt.PointingHandCursor)
+        btn_back.setStyleSheet("""
+            QPushButton { background-color: #333; color: white; border: 1px solid #555; border-radius: 5px; font-weight: bold; }
+            QPushButton:hover { background-color: #444; border-color: #0a84ff; }
+        """)
+        btn_back.clicked.connect(lambda: self.stk_stock.setCurrentIndex(0)) # İlk sayfaya dön
+        
+        self.lbl_selected_cat = QLabel("")
+        self.lbl_selected_cat.setStyleSheet("font-size: 16px; font-weight: bold; color: #0a84ff; margin-left: 10px;")
+        
+        top_bar.addWidget(btn_back)
+        top_bar.addWidget(self.lbl_selected_cat)
+        top_bar.addStretch()
+        l_table.addLayout(top_bar)
+        
+        # Stok Tablosu
         self.stock_table = QTableWidget()
         self.stock_table.setColumnCount(4)
         self.stock_table.setHorizontalHeaderLabels(["ID", "Ürün Adı", "Güncel Stok", "İşlem"])
@@ -2180,30 +3053,46 @@ class AdminDialog(QDialog):
         self.stock_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.stock_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         
-        l.addWidget(self.stock_table)
-        self.load_stock_data()
+        l_table.addWidget(self.stock_table)
+        
+        # Sayfaları Stack'e ekle
+        self.stk_stock.addWidget(self.page_stock_cats)  # Index 0
+        self.stk_stock.addWidget(self.page_stock_table) # Index 1
+        
+        main_layout.addWidget(self.stk_stock)
         self.tabs.addTab(w, "Stok Takip")
 
     def load_stock_data(self):
-        data = self.db.get_all_products_stock()
+        # 1. UI Güncellemesini Durdur (Performansı 100 kat artırır)
+        self.stock_table.setSortingEnabled(False) 
+        self.stock_table.setUpdatesEnabled(False) 
+        
         self.stock_table.setRowCount(0)
+        
+        data = self.db.get_all_products_stock()
         
         for i, (pid, name, stock) in enumerate(data):
             self.stock_table.insertRow(i)
             self.stock_table.setItem(i, 0, QTableWidgetItem(str(pid)))
             self.stock_table.setItem(i, 1, QTableWidgetItem(name))
-            self.stock_table.setItem(i, 2, QTableWidgetItem(str(stock)))
             
-            btn = QPushButton("Stok Değiştir")
-            btn.setProperty("class", "StockChangeBtn")
+            # Sayısal sıralama için
+            stock_item = QTableWidgetItem()
+            stock_item.setData(Qt.DisplayRole, stock)
+            self.stock_table.setItem(i, 2, stock_item)
+            
+            # Buton ekleme (Daha hafif bir yöntemle)
+            btn = QPushButton("Düzenle")
             btn.setCursor(Qt.PointingHandCursor)
+            btn.setStyleSheet("background-color: #0a84ff; color: white; border-radius: 4px; font-weight: bold;")
+            # Lambda sorunu olmaması için p=pid, s=stock kopyalaması yapıyoruz
             btn.clicked.connect(lambda _, p=pid, s=stock: self.update_stock_direct(p, s))
             
-            container = QWidget()
-            layout = QHBoxLayout(container)
-            layout.setContentsMargins(5,5,5,5)
-            layout.addWidget(btn)
-            self.stock_table.setCellWidget(i, 3, container)
+            self.stock_table.setCellWidget(i, 3, btn)
+
+        # 2. UI Güncellemesini Geri Aç
+        self.stock_table.setSortingEnabled(True)
+        self.stock_table.setUpdatesEnabled(True)
 
     def update_stock_direct(self, pid, current_stock):
         val, ok = QInputDialog.getInt(self, "Stok Güncelle", "Yeni Stok Adedi:", current_stock, -1000, 100000, 1)
@@ -2230,7 +3119,6 @@ class AdminDialog(QDialog):
         l.addWidget(QLabel("Askıdaki POS İşlemleri (Yanıt Alınamayanlar)"))
         l.addWidget(self.pending_table)
         
-        self.load_pending_data()
         self.tabs.addTab(w, "Bekleyen İşlemler")
 
     def load_pending_data(self):
@@ -2314,32 +3202,58 @@ class AdminDialog(QDialog):
         l.addWidget(lbl_warn)
         
         # Uygula Butonu
-        btn_apply = QPushButton("UYGULA")
-        btn_apply.setFixedHeight(60)
+        btn_apply = QPushButton("FİYATLARI GÜNCELLE (UYGULA)")
+        btn_apply.setFixedHeight(50)
         btn_apply.setStyleSheet("""
-            QPushButton { background-color: #ff9f0a; color: black; font-weight: bold; font-size: 18px; border-radius: 10px; } 
+            QPushButton { background-color: #ff9f0a; color: black; font-weight: bold; font-size: 16px; border-radius: 10px; } 
             QPushButton:hover { background-color: #ffb340; }
         """)
         btn_apply.clicked.connect(self.run_bulk_update)
         l.addWidget(btn_apply)
         
-        # Ayırıcı Çizgi
+        # --- ARA ÇİZGİ ---
         l.addSpacing(20)
         line = QFrame()
         line.setFrameShape(QFrame.HLine)
         line.setStyleSheet("background-color: #333;")
         l.addWidget(line)
+        l.addSpacing(10)
+        
+        # --- CSV / EXCEL İŞLEMLERİ (EKSİK OLAN KISIM BURASIYDI) ---
+        lbl_csv = QLabel("Toplu Ürün Düzenleme (Excel / CSV)")
+        lbl_csv.setStyleSheet("font-size: 18px; font-weight: bold; color: #34c759; margin-bottom: 10px;")
+        lbl_csv.setAlignment(Qt.AlignCenter)
+        l.addWidget(lbl_csv)
+
+        csv_layout = QHBoxLayout()
+        
+        btn_export = QPushButton("📤 DIŞA AKTAR (CSV)")
+        btn_export.setFixedHeight(50)
+        btn_export.setStyleSheet("background-color: #333; color: white; border: 1px solid #555; border-radius: 8px; font-weight:bold;")
+        btn_export.clicked.connect(self.export_csv)
+        
+        btn_import = QPushButton("📥 İÇE AKTAR (GÜNCELLE)")
+        btn_import.setFixedHeight(50)
+        btn_import.setStyleSheet("background-color: #0a84ff; color: white; border-radius: 8px; font-weight:bold;")
+        btn_import.clicked.connect(self.import_csv)
+        
+        csv_layout.addWidget(btn_export)
+        csv_layout.addWidget(btn_import)
+        l.addLayout(csv_layout)
+        # ----------------------------------------------------------
+
         l.addSpacing(20)
         
         # Yedekle Butonu
-        btn_backup = QPushButton("VERİTABANI YEDEKLE")
-        btn_backup.setFixedHeight(50)
+        btn_backup = QPushButton("YEDEK AL")
+        btn_backup.setFixedHeight(40)
         btn_backup.setStyleSheet("""
-            QPushButton { background-color: #0a84ff; color: white; font-weight: bold; font-size: 16px; border-radius: 10px; } 
-            QPushButton:hover { background-color: #007aff; }
+            QPushButton { background-color: #333; color: #888; font-weight: bold; font-size: 14px; border-radius: 8px; border: 1px dashed #555; } 
+            QPushButton:hover { background-color: #444; color: white; border: 1px solid #888; }
         """)
         btn_backup.clicked.connect(self.backup_database)
         l.addWidget(btn_backup)
+        
         l.addStretch()
         
         self.tabs.addTab(w, "Toplu İşlemler / Yedek")
