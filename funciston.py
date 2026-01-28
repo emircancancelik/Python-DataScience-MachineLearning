@@ -33,10 +33,9 @@ from PySide6.QtGui import QFont, QCursor, QPixmap, QColor
 # =====================================================
 # AYARLAR
 # =====================================================
-TEST_MODE = False  # ✅ GERÇEK POS MODU
+TEST_MODE = False  
 POS_IP = "192.168.1.157"
 POS_PORT = 6420
-
 SHOP_NAME = "BAYİÇ ALCOHOL CENTER"
 ADMIN_USER = "admin"
 ADMIN_PASS = "123456"
@@ -526,17 +525,16 @@ STYLESHEET = """
     QPushButton.CatBoxBtn:pressed { background-color: #0a84ff; color: white; border: 1px solid #0a84ff; }
 
     /* CİRO KUTUSU (TIKLANABİLİR) */
-    QLabel#CiroBox { 
-        background-color: #252525; color: #30d158; border: 1px solid #333; 
-        border-radius: 8px; font-weight: bold; font-size: 18px; padding: 0 15px; 
+    QLabel#CiroBox {
+        background-color: #252525; color: #30d158; border: 1px solid #333;
+        border-radius: 16px; font-weight: bold; font-size: 18px; padding: 8px 15px;
     }
     QLabel#CiroBox:hover { 
         border: 1px solid #30d158; cursor: pointer;
     }
 
     /* ÜST BAR BUTONLARI */
-    QPushButton.TopBarBtn { background-color: #252525; color: #e0e0e0; border: 1px solid #333; border-radius: 8px; font-weight: bold; font-size: 13px; padding: 0 15px; height: 45px; }
-    
+    QPushButton.TopBarBtn { background-color: #252525; color: #e0e0e0; border: 1px solid #333; border-radius: 16px; font-weight: bold; font-size: 13px; padding: 0 15px; height: 45px; }    
     /* BAŞLIKLAR */
     QLabel#SectionTitle { color: #808080; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; margin: 5px; }
     
@@ -1042,7 +1040,7 @@ class ProductCard(QFrame):
         
         self.setCursor(Qt.PointingHandCursor)
         self.setStyleSheet(f"""
-            QFrame {{ background-color: #252525; border-radius: 14px; border: 1px solid {'#ff453a' if stock <= 5 else '#353535'}; }}
+            QFrame {{ background-color: #252525; border-radius: 20px; border: 1px solid {'#ff453a' if stock <= 5 else '#353535'}; }}
             QFrame:hover {{ background-color: #303030; border: 1px solid #0a84ff; }}
         """)
         
@@ -1276,7 +1274,7 @@ class ClickableLabel(QLabel):
 class CategoryCard(QFrame):
     def __init__(self, name, click_cb, is_add_button=False, db_manager=None, refresh_cb=None):
         super().__init__()
-        self.setFixedSize(160, 100)
+        self.setFixedSize(150, 100)
         self.setCursor(Qt.PointingHandCursor)
         self.name = name
         self.db = db_manager
@@ -1284,21 +1282,21 @@ class CategoryCard(QFrame):
         self.cb = click_cb
         
         if is_add_button:
-            # Ekleme Butonu Stili (CSS Hatası Düzeltildi)
+            # Ekleme Butonu 
             self.setStyleSheet("""
-                QFrame { background-color: rgba(48, 209, 88, 0.1); border-radius: 12px; border: 1px dashed #30d158; }
+                QFrame { background-color: rgba(48, 209, 88, 0.1); border-radius: 24px; border: 1px dashed #30d158; }
                 QFrame:hover { background-color: rgba(48, 209, 88, 0.2); }
             """)
-            lbl_color = "#30d158"
+            lbl_color = "#414e44"
             icon_text = "+"
             font_size = "32px"
         else:
-            # Normal Kategori Stili (CSS Hatası Düzeltildi)
+            # Normal Kategori 
             self.setStyleSheet("""
-                QFrame { background-color: #252525; border-radius: 12px; border: 1px solid #333; }
+                QFrame { background-color: #252525; border-radius: 24px; border: 1px solid #333; }
                 QFrame:hover { background-color: #303030; border: 1px solid #0a84ff; }
             """)
-            lbl_color = "#0a84ff"
+            lbl_color = "#45525e"
             icon_text = name[0].upper() if name else "?"
             font_size = "24px"
 
@@ -1386,156 +1384,103 @@ class NexusPOS(QMainWindow):
         main_lay.setContentsMargins(0, 0, 0, 0)
         main_lay.setSpacing(0)
         
-        # =================================================
-        # 1. SOL PANEL (ARAMA + KATEGORİLER/ÜRÜNLER)
-        # =================================================
+        # --- 1. SOL PANEL (AYNI) ---
         left_container = QFrame()
-        left_container.setFixedWidth(520) # Izgara için genişlettik
+        left_container.setFixedWidth(520)
         left_container.setStyleSheet("background:#181818; border-right:1px solid #252525;")
         left_layout = QVBoxLayout(left_container)
-        left_layout.setContentsMargins(5, 5, 5, 5)
-        left_layout.setSpacing(15)
-
-        # --- ARAMA KUTUSU ---
+        
+        # Arama
         search_cont = QWidget()
         search_lay = QHBoxLayout(search_cont)
-        search_lay.setContentsMargins(0,0,0,0)
-        
         self.search_bar = QLineEdit()
-        self.search_bar.setPlaceholderText("🔍 Ürün Ara (İsim veya Barkod)")
+        self.search_bar.setPlaceholderText("🔍 Ürün Ara...")
         self.search_bar.setFixedHeight(40)
-        self.search_bar.setStyleSheet("""
-            QLineEdit {
-                background-color: #252525;
-                color: white;
-                border: 1px solid #333;
-                border-radius: 10px;
-                padding-left: 15px;
-                font-size: 16px;
-            }
-            QLineEdit:focus {
-                border: 1px solid #0a84ff;
-                background-color: #2a2a2a;
-            }
-        """)
+        self.search_bar.setStyleSheet("background:#252525; color:white; border:1px solid #333; border-radius:20px; padding-left:15px;")
         self.search_bar.textChanged.connect(self.on_search_changed)
-        
-        # Sanal klavye açılmaması için focus policy ayarı (opsiyonel)
-        # self.search_bar.setFocusPolicy(Qt.ClickFocus) 
-        
         search_lay.addWidget(self.search_bar)
         left_layout.addWidget(search_cont)
-
-        # --- DİNAMİK ALAN (Kategoriler veya Ürünler buraya gelecek) ---
+        
+        # Ürün Grid
         self.selection_scroll = QScrollArea()
         self.selection_scroll.setWidgetResizable(True)
         self.selection_scroll.setStyleSheet("border:none; background:transparent;")
-        
         self.selection_cont = QWidget()
-        # Grid Layout kullanıyoruz ki kutucuklar yan yana dizilsin
-        self.selection_lay = QGridLayout(self.selection_cont) 
-        self.selection_lay.setSpacing(10)
-        self.selection_lay.setAlignment(Qt.AlignTop)
-        
+        self.selection_lay = QGridLayout(self.selection_cont)
         self.selection_scroll.setWidget(self.selection_cont)
         left_layout.addWidget(self.selection_scroll)
         
         main_lay.addWidget(left_container)
 
-        # =================================================
-        # 2. ORTA PANEL: CİRO + SEPET (Aynı Kalıyor)
-        # =================================================
+        # --- 2. ORTA PANEL (MODERN SEPET) ---
         center_container = QFrame()
+        # border-right ile sağ paneli ayırıyoruz ama kendi etrafında kutu yok
         center_container.setStyleSheet("background:#1a1a1a; border-right:1px solid #333;")
         center_layout = QVBoxLayout(center_container)
-        center_layout.setContentsMargins(20, 20, 20, 20)
+        center_layout.setContentsMargins(10, 20, 10, 10) # Üstten biraz boşluk
         
         # Üst Bar
         top_bar = QHBoxLayout()
         self.lbl_ciro = ClickableLabel(f"Ciro: {self.db.get_daily_turnover():.2f} ₺")
         self.lbl_ciro.setObjectName("CiroBox")
-        self.lbl_ciro.setCursor(Qt.PointingHandCursor)
         self.lbl_ciro.clicked.connect(self.toggle_ciro_visibility)
         top_bar.addWidget(self.lbl_ciro)
         top_bar.addStretch()
-        btn_admin = QPushButton("YÖNETİM PANELİ")
+        btn_admin = QPushButton("YÖNETİM")
         btn_admin.setProperty("class", "TopBarBtn")
         btn_admin.clicked.connect(self.open_admin)
         top_bar.addWidget(btn_admin)
         center_layout.addLayout(top_bar)
         
-        self.cart_tabs = QTabWidget()
-        self.cart_tabs.setStyleSheet("""
-            QTabWidget::pane { border: 1px solid #333; background: #1a1a1a; }
-            QTabBar::tab { background: #252525; color: #888; padding: 10px 20px; border-top-left-radius: 8px; border-top-right-radius: 8px; margin-right: 2px; }
-            QTabBar::tab:selected { background: #0a84ff; color: white; font-weight: bold; }
-        """)
-        
-        # 3 Müşteri Sekmesi Ekle
-        for i in range(1, 4):
-            self.add_customer_tab(f"Müşteri {i}")
-            
-        center_layout.addWidget(self.cart_tabs)
-
-        # Sepet Tablosu
-        center_layout.addSpacing(15)
-        self.table = QTableWidget()
-        self.table.setColumnCount(3)
-        self.table.setHorizontalHeaderLabels(["ÜRÜN", "FİYAT", "ADET"])
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.table.setColumnWidth(1, 100)
-        self.table.setColumnWidth(2, 80)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setShowGrid(False)
-        self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table.setSelectionMode(QTableWidget.SingleSelection)
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.setFocusPolicy(Qt.NoFocus)
-        self.table.itemClicked.connect(self.row_selected)
-        center_layout.addWidget(self.table)
-        
-        # Toplam Tutar
+        # Toplam Tutar (Sepetin üstünde daha şık durur)
         self.lbl_total = QLabel("0.00 ₺")
         self.lbl_total.setAlignment(Qt.AlignRight)
-        self.lbl_total.setStyleSheet("font-size: 64px; font-weight:900; color:white; margin-top:10px;")
+        self.lbl_total.setStyleSheet("font-size: 70px; font-weight:900; color:white; margin: 20px 0;")
+        
+        # --- SEKMELİ SEPET (ÇERÇEVESİZ) ---
+        self.cart_tabs = QTabWidget()
+        # QTabWidget::pane { border: none; } diyerek o dış kutuyu siliyoruz
+        self.cart_tabs.setStyleSheet("""
+            QTabWidget::pane { border: none; background: transparent; }
+            QTabBar::tab { background: transparent; color: #666; font-size: 16px; font-weight: bold; padding: 10px 15px; margin-right: 10px; }
+            QTabBar::tab:selected { color: #0a84ff; border-bottom: 2px solid #0a84ff; }
+            QTabBar::tab:hover { color: #ddd; }
+        """)
+        
+        self.cart_tabs.currentChanged.connect(self.recalc_active_cart_total)
+
+        for i in range(1, 4):
+            new_table = self.create_cart_table()
+            self.cart_tabs.addTab(new_table, f"Müşteri {i}")
+        
+        self.table = self.cart_tabs.currentWidget()
+
+        center_layout.addWidget(self.cart_tabs)
         center_layout.addWidget(self.lbl_total)
         
         main_lay.addWidget(center_container, stretch=1)
 
-        # =================================================
-        # 3. SAĞ PANEL (NUMPAD - Aynı Kalıyor)
-        # =================================================
-        # =================================================
-        # 3. SAĞ PANEL
-        # =================================================
+        # --- 3. SAĞ PANEL (AYNI) ---
         right_container = QFrame()
-        right_container.setFixedWidth(400) # (360 -> 400) 
+        right_container.setFixedWidth(400)
         right_container.setStyleSheet("background:#161616;")
         right_layout = QVBoxLayout(right_container)
-        right_layout.setContentsMargins(15, 20, 15, 30)
-        right_layout.setSpacing(15)
         
-        # 1. PARA ÜSTÜ PANELİ (Stretch = 1: Kalan tüm boşluğu kapla)
         self.change_panel = self.create_change_list_panel()
         right_layout.addWidget(self.change_panel, stretch=1)
-
-        # 2. NUMPAD (Stretch = 0: Sadece ihtiyacı kadar yer kapla, büyüme)
+        
         self.numpad = MergedNumpad(self.numpad_action)
         right_layout.addWidget(self.numpad, stretch=0)
         
-        # 3. ÖDEME BUTONLARI (Sabit Yükseklik)
         pay_lay = QHBoxLayout()
-        pay_lay.setSpacing(10)
         btn_cash = QPushButton("NAKİT")
-        btn_cash.setFixedHeight(80)
         btn_cash.setProperty("class", "PayBtn")
-        btn_cash.setStyleSheet("background-color:#30d158; color:black;")
+        btn_cash.setStyleSheet("background-color:#30d158; color:black; height: 80px;")
         btn_cash.clicked.connect(lambda: self.finish_sale("Nakit"))
         
         btn_card = QPushButton("KART")
-        btn_card.setFixedHeight(80)
         btn_card.setProperty("class", "PayBtn")
-        btn_card.setStyleSheet("background-color:#0a84ff; color:white;")
+        btn_card.setStyleSheet("background-color:#0a84ff; color:white; height: 80px;")
         btn_card.clicked.connect(self.card_payment)
         
         pay_lay.addWidget(btn_cash)
@@ -1544,9 +1489,47 @@ class NexusPOS(QMainWindow):
         
         main_lay.addWidget(right_container)
         
-        # Başlangıçta kategorileri yükle
         self.load_categories_grid()
 
+    # NexusPOS sınıfı içinde:
+
+    def create_cart_table(self):
+        """Çerçevesiz ve modern tablo oluşturur."""
+        table = QTableWidget()
+        table.setColumnCount(4)
+        table.setHorizontalHeaderLabels(["ÜRÜN", "FİYAT", "ADET", " "]) # İşlem başlığını boş bıraktık
+        
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch) 
+        header.setSectionResizeMode(1, QHeaderView.Fixed)   
+        header.setSectionResizeMode(2, QHeaderView.Fixed)   
+        header.setSectionResizeMode(3, QHeaderView.Fixed)   
+        
+        table.setColumnWidth(1, 100) 
+        table.setColumnWidth(2, 60)  
+        table.setColumnWidth(3, 80)  
+
+        table.verticalHeader().setVisible(False)
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SingleSelection)
+        table.setShowGrid(False) # Izgaraları kapattık
+        
+        # CSS ile çizgileri yönetiyoruz
+        # border: none -> Tablo çerçevesi yok
+        # QHeaderView::section -> Başlık altındaki çizgi hariç kenarlık yok
+        table.setStyleSheet("""
+            QTableWidget { background-color: transparent; border: none; color: #ddd; font-size: 16px; }
+            QTableWidget::item { padding: 12px 5px; border-bottom: 1px solid #2a2a2a; } /* Hafif satır çizgisi */
+            QTableWidget::item:selected { background-color: #252525; color: #fff; border-radius: 5px; }
+            QHeaderView::section { background-color: transparent; color: #666; border: none; border-bottom: 2px solid #333; font-weight: bold; font-size: 13px; }
+            QLineEdit { background: #333; color: white; border: 1px solid #0a84ff; border-radius: 5px; }
+        """)
+
+        table.itemChanged.connect(self.on_cart_item_changed)
+        table.itemClicked.connect(self.row_selected)
+        
+        return table
+    
     def create_change_list_panel(self):
         """Sağ paneldeki liste şeklindeki para üstü alanını oluşturur"""
         frame = QFrame()
@@ -1857,51 +1840,10 @@ class NexusPOS(QMainWindow):
         else:
             self.lbl_ciro.setText("Ciro: ***")
 
-    def load_cats_sidebar(self):
-        while self.cat_lay.count():
-            i = self.cat_lay.takeAt(0)
-            if i.widget(): i.widget().deleteLater()
-        
-        # Tüm Ürünler
-        btn_all = QPushButton("TÜM ÜRÜNLER")
-        btn_all.setProperty("class", "CatBoxBtn")
-        btn_all.setStyleSheet("border: 1px solid #0a84ff; color: #0a84ff;")
-        btn_all.clicked.connect(lambda: self.show_products_popup("Tüm Ürünler"))
-        self.cat_lay.addWidget(btn_all)
-        
-        categories = self.db.get_all_categories()
-        for c in categories:
-            if c == "Tüm Ürünler": continue
-            btn = QPushButton(c)
-            btn.setProperty("class", "CatBoxBtn")
-            btn.clicked.connect(lambda _, x=c: self.show_products_popup(x))
-            self.cat_lay.addWidget(btn)
-        self.cat_lay.addStretch()
-
-    def load_quick_access(self): # hızlı erişim bölümü
-        while self.fav_lay.count():
-            i = self.fav_lay.takeAt(0)
-            if i.widget(): i.widget().deleteLater()
-            
-        favorites = self.db.get_favorites()
-        if not favorites: return
-
-        # 4 Sütunlu Mantık
-        max_col = 4
-        
-        for i, (pid, name, price, img, is_fav, stock) in enumerate(favorites):
-            row = i // max_col
-            col = i % max_col
-            
-            card = ProductCard(pid, name, price, img, is_fav, stock, self.add_to_cart, self.refresh_ui, self.db, is_mini=True)
-            card.setFixedSize(120, 130) # hızlı erişim ürün boyutları
-            
-            self.fav_lay.addWidget(card, row, col)
-
     def show_products_popup(self, cat): # hızlı erişim ürünleri
         dlg = QDialog(self)
         dlg.setWindowTitle(f"{cat}")
-        dlg.resize(1000, 700)
+        dlg.resize(2000, 700)
         dlg.setStyleSheet("background-color: #1a1a1a;")
         
         layout = QVBoxLayout(dlg)
@@ -1944,69 +1886,129 @@ class NexusPOS(QMainWindow):
         layout.addWidget(btn_close)
         dlg.exec()
 
+    def get_active_table(self):
+        """Aktif sekmedeki tabloyu döndürür"""
+        return self.cart_tabs.currentWidget()
+
     def add_to_cart(self, name, price):
-        found = False
-        target_index = -1
+        table = self.get_active_table()
         
-        # Ürün zaten sepette mi kontrol et
-        for i, item in enumerate(self.cart_data):
-            if item['name'] == name:
-                item['qty'] += 1
-                found = True
-                target_index = i
+        found_row = -1
+        for row in range(table.rowCount()):
+            item = table.item(row, 0)
+            if item and item.text() == name:
+                found_row = row
                 break
         
-        # Yoksa yeni ekle
-        if not found:
-            self.cart_data.append({
-                'name': name, 
-                'price': float(price), # Fiyatın sayı olduğundan emin oluyoruz
-                'qty': 1
-            })
-            target_index = len(self.cart_data) - 1
+        if found_row != -1:
+            qty_item = table.item(found_row, 2)
+            try:
+                cur_qty = int(qty_item.text())
+            except:
+                cur_qty = 1
+                
+            table.blockSignals(True)
+            qty_item.setText(str(cur_qty + 1))
+            table.blockSignals(False)
+            table.selectRow(found_row)
+            self.selected_row = found_row
             
-        # Ekranı Yenile
-        self.render_cart()
-        
-        # Eklenen satıra odaklan (Otomatik kaydırma)
-        if target_index != -1:
-            self.table.selectRow(target_index)
-            self.selected_row = target_index
-            self.table.scrollToItem(self.table.item(target_index, 0))
+        else:
+            row = table.rowCount()
+            table.insertRow(row)
+            
+            # Ürün Adı (Çizgisiz, sade)
+            it_name = QTableWidgetItem(str(name))
+            it_name.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
+            table.setItem(row, 0, it_name)
+            
+            # Fiyat (Bunu belirgin yapıyoruz)
+            it_price = QTableWidgetItem(f"{float(price):.2f}")
+            it_price.setTextAlignment(Qt.AlignCenter)
+            # Fiyatı düzenlenebilir yapıyoruz
+            it_price.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
+            table.setItem(row, 1, it_price)
+            
+            # Adet
+            it_qty = QTableWidgetItem("1")
+            it_qty.setTextAlignment(Qt.AlignCenter)
+            it_qty.setForeground(QColor("#30d158"))
+            it_qty.setFont(QFont("Segoe UI", 14, QFont.Bold))
+            it_qty.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
+            table.setItem(row, 2, it_qty)
+            
+            # Sil Butonu (Sadeleştirildi)
+            btn = QPushButton("Sil")
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setStyleSheet("""
+                QPushButton { background-color: transparent; color: #666; font-weight: bold; border: 1px solid #333; border-radius: 5px; }
+                QPushButton:hover { background-color: #ff453a; color: white; border: 1px solid #ff453a; }
+            """)
+            btn.clicked.connect(lambda: self.smart_delete_row(btn))
+            table.setCellWidget(row, 3, btn)
+            
+            table.selectRow(row)
+            self.selected_row = row
 
-    def render_cart(self):
-        """Sepeti ekrana çizer ve toplamı günceller"""
-        self.table.setRowCount(0) # Tabloyu temizle
+        self.recalc_active_cart_total()
+
+    def smart_delete_row(self, button_widget):
+        """Silme butonuna basıldığında çalışır"""
+        table = self.get_active_table()
+        
+        # Butonun hangi satırda olduğunu bul
+        index = table.indexAt(button_widget.pos())
+        if not index.isValid(): return
+        row = index.row()
+        
+        qty_item = table.item(row, 2)
+        try:
+            qty = int(qty_item.text())
+        except:
+            qty = 1
+            
+        if qty > 1:
+            table.blockSignals(True)
+            qty_item.setText(str(qty - 1))
+            table.blockSignals(False)
+            self.recalc_active_cart_total()
+        else:
+            reply = QMessageBox.question(self, "Sil", "Ürün sepetten silinsin mi?", QMessageBox.Yes | QMessageBox.No)
+            if reply == QMessageBox.Yes:
+                table.removeRow(row)
+                self.recalc_active_cart_total()
+                self.selected_row = -1
+                
+    def on_cart_item_changed(self, item):
+        """Kullanıcı tabloda elle fiyat veya adet değiştirirse tetiklenir"""
+        self.recalc_active_cart_total()
+
+    def recalc_active_cart_total(self):
+        """Aktif tablodan verileri okur, cart_data'yı ve toplamı günceller"""
+        # Eğer lbl_total henüz yaratılmadıysa (program açılışı) işlem yapma
+        if not hasattr(self, 'lbl_total'): 
+            return
+
+        table = self.get_active_table()
+        self.table = table # Aktif tablo referansını güncelle
+        
+        self.cart_data = [] # Listeyi sıfırla
         total = 0.0
         
-        for i, item in enumerate(self.cart_data):
-            self.table.insertRow(i)
-            
-            # 1. Sütun: Ürün Adı
-            item_name = QTableWidgetItem(str(item['name']))
-            item_name.setFont(QFont("Segoe UI", 14, QFont.Bold))
-            self.table.setItem(i, 0, item_name)
-            
-            # 2. Sütun: Fiyat
-            item_price = QTableWidgetItem(f"{item['price']:.2f}")
-            item_price.setFont(QFont("Segoe UI", 14))
-            self.table.setItem(i, 1, item_price)
-            
-            # 3. Sütun: Adet (BURASI SORUNLUYDU)
-            qty_val = item['qty']
-            item_qty = QTableWidgetItem(str(qty_val)) # Mutlaka str() olmalı
-            item_qty.setTextAlignment(Qt.AlignCenter)
-            item_qty.setFont(QFont("Segoe UI", 16, QFont.Bold))
-            item_qty.setForeground(QColor("#30d158")) # Yeşil renk
-            self.table.setItem(i, 2, item_qty)
-            
-            # Toplam Hesapla
-            total += item['price'] * item['qty']
+        for r in range(table.rowCount()):
+            try:
+                name = table.item(r, 0).text()
+                price = float(table.item(r, 1).text().replace(",", "."))
+                qty = int(table.item(r, 2).text())
+                
+                total += price * qty
+                self.cart_data.append({'name': name, 'price': price, 'qty': qty})
+            except:
+                pass 
         
-        # Genel Toplam Etiketini Güncelle
         self.lbl_total.setText(f"{total:.2f} ₺")
-
-        if hasattr(self, 'change_labels'):
+        
+        if hasattr(self, 'update_change_list'):
             self.update_change_list()
 
     def row_selected(self):
@@ -2039,59 +2041,6 @@ class NexusPOS(QMainWindow):
                 # Şimdilik basit tutuyoruz.
                 self.barcode_buffer += e.text()
 
-    def numpad_action(self, key):
-        """Hem Numpad hem Klavye burayı tetikler"""
-        if self.selected_row == -1 and self.cart_data:
-            self.selected_row = len(self.cart_data) - 1
-            self.table.selectRow(self.selected_row)
-            
-        if self.selected_row == -1: return
-            
-        item = self.cart_data[self.selected_row]
-        cur_s = str(item['qty'])
-        
-        if key == 'C':
-            self.cart_data.pop(self.selected_row)
-            self.selected_row = -1
-            if self.cart_data: self.selected_row = len(self.cart_data) - 1
-        elif key == '⌫':
-            if len(cur_s) > 1:
-                item['qty'] = int(cur_s[:-1])
-            else:
-                self.cart_data.pop(self.selected_row)
-                self.selected_row = -1
-                if self.cart_data: self.selected_row = len(self.cart_data) - 1
-        else:
-            # Yeni sayı girişi
-            if item['qty'] == 1 and len(cur_s) == 1:
-                 # Adet 1 ise ve tek haneli sayı giriliyorsa üzerine yaz (15 olmasın, 5 olsun)
-                 item['qty'] = int(key)
-            else:
-                 item['qty'] = int(cur_s + key)
-                 
-        self.render_cart()
-        
-        # Seçimi koru
-        if self.selected_row != -1 and self.selected_row < self.table.rowCount():
-            self.table.selectRow(self.selected_row)
-            self.table.setCurrentCell(self.selected_row, 2)
-
-    # ... Diğer metodlar aynı (finish_sale, card_payment, on_pos_result, etc.) ...
-    # Kodu kısaltmak için değişmeyen fonksiyonları tekrar yazmıyorum, 
-    # önceki kodunuzdaki finish_sale, card_payment, mark_pending, add_category, open_admin, process_barcode_scan fonksiyonlarını aynen kullanın.
-    
-    def finish_sale(self, method):
-       if not self.cart_data: return
-       total = sum([x['price'] * x['qty'] for x in self.cart_data])
-       try:
-           alerts = self.db.record_sale(self.cart_data, total, method)
-           if alerts: QMessageBox.warning(self, "Kritik Stok", "\n".join(alerts))
-           self.cart_data = []
-           self.render_cart()
-           self.update_ciro()
-           QMessageBox.information(self, "Başarılı", "Satış tamamlandı!")
-       except Exception as e:
-           QMessageBox.critical(self, "Hata", str(e))
 
     def card_payment(self):
         if not self.cart_data: 
@@ -2134,12 +2083,6 @@ class NexusPOS(QMainWindow):
     def get_current_cart(self):
         """Aktif sekmedeki sepeti döndürür"""
         return self.cart_tabs.currentWidget()
-
-    def add_to_cart(self, name, price):
-        """Seçilen ürünü aktif sekmeye ekler"""
-        cart = self.get_current_cart()
-        if cart:
-            cart.add_item(name, price)
 
     def update_total_display(self, total):
         """Aktif sekmenin toplamı değişince çalışır"""
@@ -2281,11 +2224,7 @@ class AdminDialog(QDialog):
         self.setup_stock_tracking()       # Tab 4
         self.setup_pending_transactions() # Tab 5
         self.setup_bulk_operations()      # Tab 6
-
-        # Sadece İLK sekmenin verisini yükle (Program açılınca donmasın)
         self.load_finance_data()
-
-    # AdminDialog sınıfının içine (en alta) ekleyin:
 
     def load_product_to_form(self, pid):
         """Seçilen ürünü düzenleme formuna yükler"""
