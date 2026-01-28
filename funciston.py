@@ -13,7 +13,12 @@ import time
 import json
 import shutil 
 import csv
+import pandas as pd
+import numpy as np
+import sqlite3
 
+from sklearn.ensemble import RandomForestRegressor, IsolationForest
+from sklearn.cluster import KMeans
 from enum import Enum
 from typing import Optional, Dict, List
 from dataclasses import dataclass
@@ -27,7 +32,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QComboBox, QProgressDialog, QTabWidget, QMenu, QInputDialog,
                                QSplitter, QAbstractItemView, QButtonGroup, QSizePolicy, QGroupBox,
                                QDoubleSpinBox, QFileDialog,QStackedWidget)
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QFont, QCursor, QPixmap, QColor
 
 # =====================================================
@@ -1363,6 +1368,378 @@ class CategoryCard(QFrame):
             else:
                 QMessageBox.warning(self, "Hata", "Bu isimde bir kategori zaten var!")
 
+# =====================================================
+# YAPAY ZEKA SERVİSİ (AI SERVICE)
+# =====================================================
+# =====================================================
+# GELİŞTİRİLMİŞ YAPAY ZEKA SERVİSİ (AI SERVICE v2)
+# =====================================================
+class AIService:
+    def __init__(self, db_path="voidpos.db"):
+        self.db_path = db_path
+
+    def get_connection(self):
+        return sqlite3.connect(self.db_path)
+    
+    def suggest_bundles(self):
+        """Birlikte satılması muhtemel ürün ikililerini bulur (Cross-Sell)."""
+        try:
+            conn = self.get_connection()
+            # Birlikte en çok satılan ikilileri bul
+            query = """
+                SELECT a.product_name, b.product_name, COUNT(*) as frequency
+                FROM sale_items a
+                JOIN sale_items b ON a.sale_id = b.sale_id
+                WHERE a.product_name < b.product_name 
+                GROUP BY a.product_name, b.product_name
+                ORDER BY frequency DESC
+                LIMIT 3
+            """
+            pairs = conn.execute(query).fetchall()
+            conn.close()
+            
+            bundles = []
+            if not pairs: return None
+            
+            for p1, p2, freq in pairs:
+                # Frekans düşükse önerme
+                if freq < 2: continue 
+                
+                bundles.append(f"📦 **{p1} + {p2} Kampanyası**\n   Bu ikili {freq} kez birlikte satıldı. Paket yapıp vitrine koyun!")
+                
+            return bundles
+        except:
+            return None
+        
+    # --- 1. GÖRSEL TAHMİN VERİSİ ---
+    def get_forecast_data(self, days=7):
+        """Grafik çizimi için geçmiş ve gelecek verisini hazırlar."""
+        try:
+            conn = self.get_connection()
+            # Son 30 günün verisini al (Geçmişi çizmek için)
+            query = """
+                SELECT sale_date, SUM(total_amount) as total 
+                FROM sales 
+                WHERE sale_date >= date('now', '-30 days')
+                GROUP BY sale_date ORDER BY sale_date ASC
+            """
+            df = pd.read_sql(query, conn)
+            conn.close()
+
+            if len(df) < 5: return None, "Yetersiz Veri"
+
+            # Tarih dönüşümleri
+            df['sale_date'] = pd.to_datetime(df['sale_date'])
+            df['ordinal'] = df['sale_date'].map(datetime.datetime.toordinal)
+
+            # Eğit
+            model = RandomForestRegressor(n_estimators=100, random_state=42)
+            model.fit(df[['ordinal']], df['total'])
+
+            # Gelecek Tahmini
+            future_dates = []
+            future_vals = []
+            last_date = datetime.date.today()
+            
+            for i in range(1, days + 1):
+                next_day = last_date + datetime.timedelta(days=i)
+                pred = model.predict([[next_day.toordinal()]])[0]
+                future_dates.append(next_day.strftime("%d.%m")) # Grafik için kısa tarih
+                future_vals.append(round(pred, 2))
+
+            # Geçmiş Veriler (Grafik için)
+            history_dates = df['sale_date'].dt.strftime("%d.%m").tolist()
+            history_vals = df['total'].tolist()
+
+            return {
+                "history": (history_dates, history_vals),
+                "forecast": (future_dates, future_vals)
+            }, "Başarılı"
+        except Exception as e:
+            return None, str(e)
+
+    # --- 2. YOĞUNLUK ANALİZİ (PERSONEL PLANLAMA) ---
+    def analyze_busy_hours(self):
+        """Günün hangi saatleri yoğun? Ekstra personel lazım mı?"""
+        try:
+            conn = self.get_connection()
+            # SQLite'da saat bilgisini çek (HH)
+            query = "SELECT strftime('%H', timestamp) as hour, COUNT(*) as count FROM sales GROUP BY hour"
+            df = pd.read_sql(query, conn)
+            conn.close()
+
+            if df.empty: return None
+
+            # En yoğun saati bul
+            busiest = df.loc[df['count'].idxmax()]
+            busy_hour = int(busiest['hour'])
+            
+            # Tavsiye Oluştur
+            advice = ""
+            if busy_hour >= 17 and busy_hour <= 20:
+                advice = "Akşam iş çıkışı yoğunluğu. 2. Kasa açılmalı."
+            elif busy_hour >= 11 and busy_hour <= 13:
+                advice = "Öğle arası yoğunluğu. Hızlı kasa modu aktif edilmeli."
+            else:
+                advice = "Standart yoğunluk."
+
+            return {
+                "busiest_hour": f"{busy_hour}:00 - {busy_hour+1}:00",
+                "transaction_count": busiest['count'],
+                "advice": advice
+            }
+        except:
+            return None
+
+    # --- 3. ÖLÜ STOK ANALİZİ (İNDİRİM ÖNERİSİ) ---
+    # AIService Sınıfı İçindeki Eski Fonksiyonu Bununla Değiştirin:
+
+    def suggest_discounts(self):
+        """Kâr marjını koruyarak ölü stok indirimi önerir."""
+        try:
+            conn = self.get_connection()
+            # Stokta > 5 olan ama son 10 gündür satılmayan ürünleri bul
+            # Ayrıca maliyet fiyatını da çekiyoruz
+            query = """
+                SELECT name, stock, sell_price, cost_price FROM products 
+                WHERE stock > 5 
+                AND name NOT IN (
+                    SELECT DISTINCT product_name FROM sale_items 
+                    WHERE sale_date >= date('now', '-10 days')
+                )
+            """
+            products = conn.execute(query).fetchall()
+            conn.close()
+            
+            suggestions = []
+            for name, stock, sell_price, cost_price in products:
+                # Varsayılan %15 indirim
+                discounted_price = sell_price * 0.85
+                profit = discounted_price - cost_price
+                
+                margin_percent = (profit / discounted_price) * 100 if discounted_price > 0 else 0
+                
+                if profit > 0:
+                    status = f"✅ Kârlı İndirim (Marj: %{margin_percent:.1f})"
+                    color = "#30d158" # Yeşil
+                else:
+                    status = f"⚠️ Zararına Satış (Zarar: {abs(profit):.2f} TL)"
+                    color = "#ff453a" # Kırmızı
+                
+                msg = f"{status} -> {name}: {sell_price} ₺ yerine {discounted_price:.2f} ₺ yapın. (Stok: {stock})"
+                suggestions.append((msg, color))
+            
+            return suggestions
+        except:
+            return []
+
+    # --- (Eski Özellikler Korunuyor: Anomali, Segmentasyon, Ürün Önerisi) ---
+    def detect_anomalies(self):
+        # ... (Eski kodunuzdaki detect_anomalies içeriği aynen kalsın) ...
+        try:
+            conn = self.get_connection()
+            df = pd.read_sql("SELECT id, total_amount, sale_date FROM sales", conn)
+            conn.close()
+            if len(df) < 10: return None
+            model = IsolationForest(contamination=0.05, random_state=42)
+            df['anomaly'] = model.fit_predict(df[['total_amount']])
+            return df[df['anomaly'] == -1].values.tolist()
+        except: return None
+
+    def segment_baskets(self):
+        # ... (Eski kodunuzdaki segment_baskets içeriği aynen kalsın) ...
+        try:
+            conn = self.get_connection()
+            df = pd.read_sql("SELECT total_amount FROM sales", conn)
+            conn.close()
+            if len(df) < 10: return None
+            kmeans = KMeans(n_clusters=3, random_state=42)
+            df['cluster'] = kmeans.fit_predict(df[['total_amount']])
+            centers = kmeans.cluster_centers_
+            sorted_indices = np.argsort(centers.flatten())
+            mapping = {sorted_indices[0]: "Düşük", sorted_indices[1]: "Orta", sorted_indices[2]: "VIP"}
+            return df['cluster'].map(mapping).value_counts().to_dict()
+        except: return None
+
+    def recommend_product(self, current_cart_names):
+        # ... (Eski kodunuzdaki recommend_product içeriği aynen kalsın) ...
+        if not current_cart_names: return None
+        try:
+            conn = self.get_connection()
+            placeholders = ','.join(['?'] * len(current_cart_names))
+            query = f"""
+                SELECT s2.product_name, COUNT(*) as cnt
+                FROM sale_items s1
+                JOIN sale_items s2 ON s1.sale_id = s2.sale_id
+                WHERE s1.product_name IN ({placeholders})
+                AND s2.product_name NOT IN ({placeholders})
+                GROUP BY s2.product_name
+                ORDER BY cnt DESC LIMIT 1
+            """
+            res = conn.execute(query, current_cart_names).fetchone()
+            conn.close()
+            return res[0] if res else None
+        except: return None
+
+    # --- 4. AKILLI STOK UYARISI ---
+    def check_critical_stock_smart(self):
+        """Satış hızına göre dinamik stok uyarısı."""
+        try:
+            conn = self.get_connection()
+            query = """
+                SELECT product_name, SUM(quantity) as total_sold, p.stock
+                FROM sale_items s
+                JOIN products p ON s.product_name = p.name
+                WHERE s.sale_date >= date('now', '-7 days')
+                GROUP BY product_name
+            """
+            df = pd.read_sql(query, conn)
+            conn.close()
+
+            alerts = []
+            for _, row in df.iterrows():
+                avg_daily_sales = row['total_sold'] / 7
+                if avg_daily_sales == 0: continue
+                
+                suggested_min = (avg_daily_sales * 3) + 2 # 3 günlük stok + 2 güvenlik
+                
+                if row['stock'] < suggested_min:
+                    alerts.append(f"{row['product_name']}: Stok {row['stock']} (Önerilen Min: {int(suggested_min)})")
+            return alerts
+        except:
+            return []
+    
+    # --- 5. ÜRÜN ÖNERİSİ ---
+    def recommend_product(self, current_cart_names):
+        """Sepetteki ürünlerin yanına ne gider?"""
+        if not current_cart_names: return None
+        try:
+            conn = self.get_connection()
+            placeholders = ','.join(['?'] * len(current_cart_names))
+            query = f"""
+                SELECT s2.product_name, COUNT(*) as cnt
+                FROM sale_items s1
+                JOIN sale_items s2 ON s1.sale_id = s2.sale_id
+                WHERE s1.product_name IN ({placeholders})
+                AND s2.product_name NOT IN ({placeholders})
+                GROUP BY s2.product_name
+                ORDER BY cnt DESC
+                LIMIT 1
+            """
+            cursor = conn.cursor()
+            res = cursor.execute(query, current_cart_names).fetchone()
+            conn.close()
+            return res[0] if res else None
+        except:
+            return None
+
+class VoidAI_Engine:
+    def __init__(self, csv_yolu="urunler_klasoru/urunler.csv"):
+        # Dosya yolunu kendine göre düzeltmeyi unutma!
+        self.csv_yolu = csv_yolu
+
+    def verileri_cek(self):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        # Ürünleri veritabanından çekiyoruz (sütun isimlerini kendi DB'ne göre ayarla)
+        cursor.execute("SELECT id, urun_adi, stok, kritik_seviye, skt FROM urunler")
+        veriler = cursor.fetchall()
+        conn.close()
+        
+        # AI'ın anlayacağı formata çeviriyoruz
+        urun_listesi = []
+        for v in veriler:
+            urun_listesi.append({
+                "id": v[0], "ad": v[1], "stok": v[2], "kritik": v[3], "skt": v[4]
+            })
+        return urun_listesi
+    
+    def verileri_oku(self):
+        """CSV dosyasını okur ve bir liste olarak döndürür."""
+        if not os.path.exists(self.csv_yolu):
+            return []
+        
+        veriler = []
+        with open(self.csv_yolu, mode='r', encoding='utf-8') as file:
+            reader = csv.DictReader(file)
+            for row in reader:
+                veriler.append(row)
+        return veriler
+
+    def tum_analizleri_yap(self):
+        """Hem stok hem SKT analizini tek seferde yapar."""
+        urunler = self.verileri_oku()
+        oneriler = []
+        bugun = datetime.date.today()
+
+        if not urunler:
+            return [{"mesaj": "HATA: CSV dosyası boş veya bulunamadı!"}]
+
+        for urun in urunler:
+            # Veri Tipi Dönüşümleri (CSV hep string okur, sayıya çevirmeliyiz)
+            try:
+                u_id = urun['id']
+                ad = urun['urun_adi']
+                stok = int(urun['stok'])
+                fiyat = float(urun['fiyat'])
+                hiz = urun['satis_hizi'] # "YUKSEK", "NORMAL" vs.
+                
+                # Tarih Dönüşümü (YYYY-AA-GG formatında olmalı)
+                skt_obj = datetime.datetime.strptime(urun['skt'], "%Y-%m-%d").date()
+                kalan_gun = (skt_obj - bugun).days
+            except ValueError:
+                continue # Hatalı satırı atla
+
+            # --- KURAL 1: KRİTİK STOK ANALİZİ ---
+            # Stok 20'den azsa VE Satış Hızı Yüksekse
+            if stok < 20 and hiz == "YUKSEK":
+                eksik = 50 - stok # 50'ye tamamla
+                oneriler.append({
+                    "tur": "SIPARIS",
+                    "mesaj": f"📦 STOK ALARMI: {ad} çok hızlı satıyor ama elde {stok} kaldı. {eksik} adet sipariş geçilmeli.",
+                    "aksiyon_verisi": {"id": u_id, "islem": "mail_at", "miktar": eksik}
+                })
+
+            # --- KURAL 2: SKT (SON KULLANMA) ANALİZİ ---
+            if 0 < kalan_gun <= 3:
+                yeni_fiyat = fiyat * 0.90 # %10 İndirim
+                oneriler.append({
+                    "tur": "INDIRIM",
+                    "mesaj": f"📉 SKT UYARISI: {ad} bozulmak üzere ({kalan_gun} gün kaldı). Fiyatı {fiyat} -> {yeni_fiyat:.2f} TL yapalım mı?",
+                    "aksiyon_verisi": {"id": u_id, "islem": "fiyat_dusur", "yeni_fiyat": yeni_fiyat}
+                })
+
+        return oneriler
+
+    def aksiyonu_uygula(self, aksiyon_verisi):
+        """
+        Kullanıcı 'Onayla' dediğinde CSV'yi günceller veya Mail atar.
+        """
+        if aksiyon_verisi["islem"] == "mail_at":
+            # Mail simülasyonu
+            return f"Tedarikçiye {aksiyon_verisi['miktar']} adetlik sipariş maili gönderildi. ✅"
+
+        elif aksiyon_verisi["islem"] == "fiyat_dusur":
+            # --- CSV GÜNCELLEME (EN ÖNEMLİ KISIM) ---
+            tum_urunler = self.verileri_oku()
+            
+            # Listeyi gez, ilgili ürünü bul ve fiyatını değiştir
+            for urun in tum_urunler:
+                if urun['id'] == aksiyon_verisi['id']:
+                    urun['fiyat'] = str(aksiyon_verisi['yeni_fiyat']) # Yeni fiyatı yaz
+                    break
+            
+            # Dosyayı baştan yaz (Güncelleme işlemi)
+            basliklar = ["id", "urun_adi", "stok", "fiyat", "satis_hizi", "skt"]
+            with open(self.csv_yolu, mode='w', encoding='utf-8', newline='') as file:
+                writer = csv.DictWriter(file, fieldnames=basliklar)
+                writer.writeheader()
+                writer.writerows(tum_urunler)
+            
+            return f"Fiyat güncellendi ve etiket basıldı. ✅"
+
+        return "İşlem başarısız."
+
 # --- ANA UYGULAMA ---
 class NexusPOS(QMainWindow):
     def __init__(self):
@@ -1376,7 +1753,15 @@ class NexusPOS(QMainWindow):
         self.setWindowTitle("VoidPOS")
         self.resize(1600, 900)
         self.setStyleSheet(STYLESHEET)
-    
+        self.ai = AIService("voidpos.db")
+        # Klasör yoksa oluştur
+        if not os.path.exists("urunler_klasoru"):
+            os.makedirs("urunler_klasoru")
+        self.db.export_products_to_csv("urunler_klasoru/urunler.csv")
+        self.ai_timer = QTimer(self)
+        self.ai_timer.timeout.connect(self.ai_otomatik_kontrol)
+        self.ai_timer.start(10000) # 10.000 ms = 10 
+        
     def init_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
@@ -1431,7 +1816,15 @@ class NexusPOS(QMainWindow):
         btn_admin.clicked.connect(self.open_admin)
         top_bar.addWidget(btn_admin)
         center_layout.addLayout(top_bar)
-        
+        self.ai_btn = QPushButton("AI: Sistem Stabil")
+        self.ai_btn.setProperty("class", "TopBarBtn") 
+        self.ai_btn.setCursor(Qt.PointingHandCursor)        
+        self.ai_btn.clicked.connect(self.ai_analiz_butonuna_tiklandi)
+        top_bar.addWidget(self.ai_btn)
+        # Tıklayınca manuel analiz fonksiyonuna gidecek
+        self.ai_btn.clicked.connect(self.ai_analiz_butonuna_tiklandi)
+        top_bar.addWidget(self.ai_btn)
+
         # Toplam Tutar (Sepetin üstünde daha şık durur)
         self.lbl_total = QLabel("0.00 ₺")
         self.lbl_total.setAlignment(Qt.AlignRight)
@@ -1894,6 +2287,14 @@ class NexusPOS(QMainWindow):
         table = self.get_active_table()
         
         found_row = -1
+        current_cart = [item['name'] for item in self.get_current_cart()]
+        suggestion = self.ai.recommend_product(current_cart)
+        if suggestion:
+            self.search_bar.setPlaceholderText(f"💡 ÖNERİ: Müşteriye '{suggestion}' teklif edin!")
+            # İsterseniz sesli uyarı veya popup da koyabilirsiniz ama bu en zarifi.
+        else:
+            self.search_bar.setPlaceholderText("🔍 Ürün Ara...")
+
         for row in range(table.rowCount()):
             item = table.item(row, 0)
             if item and item.text() == name:
@@ -1951,6 +2352,24 @@ class NexusPOS(QMainWindow):
             self.selected_row = row
 
         self.recalc_active_cart_total()
+
+        try:
+            # Şu anki sepetteki ürün isimlerini al
+            current_cart_names = [item['name'] for item in self.get_current_cart()]
+            
+            # AI'dan öneri iste
+            suggestion = self.ai.recommend_product(current_cart_names)
+            
+            # Öneri varsa arama çubuğunda göster
+            if suggestion:
+                self.search_bar.setPlaceholderText(f"💡 AI ÖNERİSİ: Müşteriye '{suggestion}' önerin!")
+                # İsterseniz arama kutusunun stilini değiştirip dikkat çekebilirsiniz
+                self.search_bar.setStyleSheet("QLineEdit { background-color: #2a1a1a; color: #ffcc00; border: 1px solid #ffcc00; border-radius: 10px; padding-left: 10px; }")
+            else:
+                self.search_bar.setPlaceholderText("🔍 Ürün Ara...")
+                self.search_bar.setStyleSheet("QLineEdit { background-color: #252525; color: white; border-radius: 10px; padding-left: 10px; }")
+        except Exception as e:
+            print(f"AI Hatası: {e}")
 
     def smart_delete_row(self, button_widget):
         """Silme butonuna basıldığında çalışır"""
@@ -2191,6 +2610,84 @@ class NexusPOS(QMainWindow):
            self.add_to_cart(product[0], product[1])
        else:
            QMessageBox.warning(self, "Bulunamadı", f"Barkod kayıtlı değil: {barcode}")
+    # --- AI ENTEGRASYON FONKSİYONLARI ---
+
+    def ai_otomatik_kontrol(self):
+        """Arka planda sessizce çalışır, buton rengini değiştirir."""
+        
+        # Klasör ve dosya kontrolü (Hata almamak için)
+        if not os.path.exists("urunler_klasoru/urunler.csv"):
+            return 
+
+        motor = VoidAI_Engine("urunler_klasoru/urunler.csv")
+        sonuclar = motor.tum_analizleri_yap()
+        
+        if sonuclar:
+            # --- DURUM: UYARI VAR (KIRMIZI VE YANIP SÖNEN) ---
+            self.ai_btn.setText(f"AI: {len(sonuclar)} ÖNERİ VAR!")
+            # Yönetim tuşu boyutlarında (Radius 16px) ama KIRMIZI
+            self.ai_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #e74c3c; 
+                    color: white; 
+                    border: 1px solid #c0392b;
+                    border-radius: 16px; 
+                    font-weight: bold;
+                    font-size: 13px;
+                    padding: 0 15px;
+                    height: 45px;
+                }
+                QPushButton:hover { background-color: #c0392b; }
+            """)
+            # Not: PySide6 CSS animasyonunu (blink) doğrudan desteklemez, 
+            # ama kırmızılık yeterince dikkat çeker. Yanıp sönme için QTimer gerekir.
+            
+        else:
+            self.ai_btn.setText("AI: Sistem Stabil")
+            self.ai_btn.setStyleSheet("""
+                QPushButton { 
+                    background-color: #252525; 
+                    color: #e0e0e0; 
+                    border: 1px solid #333; 
+                    border-radius: 16px; 
+                    font-weight: bold; 
+                    font-size: 13px; 
+                    padding: 0 15px; 
+                    height: 45px; 
+                }
+                QPushButton:hover { background-color: #333; border: 1px solid #555; }
+            """)
+
+    def ai_analiz_butonuna_tiklandi(self):
+        """Kasiyer butona bastığında detayları gösterir"""
+        motor = VoidAI_Engine("urunler_klasoru/urunler.csv")
+        sonuclar = motor.tum_analizleri_yap()
+        
+        if sonuclar:
+            for oneri in sonuclar:
+                cevap = QMessageBox.question(
+                    self, 
+                    "VoidAI Önerisi", 
+                    oneri["mesaj"] + "\n\nBu işlemi onaylıyor musun?",
+                    QMessageBox.Yes | QMessageBox.No
+                )
+                
+                if cevap == QMessageBox.Yes:
+                    # İşlemi uygula (Fiyat düşme vb.)
+                    sonuc_mesaji = motor.aksiyonu_uygula(oneri["aksiyon_verisi"])
+                    
+                    # Eğer fiyat değiştiyse veritabanını da güncellememiz gerekir!
+                    # CSV motoru CSV'yi günceller, ama SQLite'ı da senkronize etmeliyiz:
+                    if oneri["aksiyon_verisi"]["islem"] == "fiyat_dusur":
+                        pid = oneri["aksiyon_verisi"]["id"]
+                        yeni_fiyat = oneri["aksiyon_verisi"]["yeni_fiyat"]
+                        self.db.update_product_field(pid, "sell_price", yeni_fiyat)
+                        self.refresh_ui() # Arayüzü yenile
+                        
+                    QMessageBox.information(self, "Bilgi", sonuc_mesaji)
+        else:
+            QMessageBox.information(self, "VoidAI", "Harika! Sistem stabil. Kritik stok veya SKT sorunu yok.")
+                   
 #yönetim paneli
 # ==========================================
 # YÖNETİM PANELİ
@@ -2203,7 +2700,7 @@ class AdminDialog(QDialog):
         self.setWindowTitle("Yönetim Paneli")
         self.resize(1200, 800) # Biraz daha genişletelim
         self.setStyleSheet("background:#1a1a1a; color:white;")
-        
+        self.setup_ai_center()
         layout = QVBoxLayout(self)
         
         # Sekmeler
@@ -2226,6 +2723,146 @@ class AdminDialog(QDialog):
         self.setup_bulk_operations()      # Tab 6
         self.load_finance_data()
 
+
+    # AdminDialog Sınıfı İçinde:
+
+    def setup_ai_center(self):
+        self.ai = AIService(self.db.db_name)
+        
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        
+        # --- Butonlar ---
+        btn_layout = QHBoxLayout()
+        buttons = {
+            "📈 Ciro Tahmini": self.action_forecast_graph,
+            "⏰ Yoğunluk Analizi": self.action_busy_hours,
+            "🏷️ Akıllı İndirim (Kâr/Zarar)": self.action_discounts,
+            "🎁 Kampanya Önerileri": self.action_bundles,       
+            "🚨 Güvenlik Taraması": self.action_fraud
+        }
+        
+        for text, func in buttons.items():
+            b = QPushButton(text)
+            b.setFixedHeight(50)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setStyleSheet("background:#333; color:white; border:1px solid #555; border-radius:8px; font-weight:bold;")
+            b.clicked.connect(func)
+            btn_layout.addWidget(b)
+        
+        layout.addLayout(btn_layout)
+        
+        # --- GRAFİK ALANI (YENİ) ---
+        # Mevcut MplCanvas sınıfını kullanarak grafik alanı ekliyoruz
+        self.ai_canvas = MplCanvas(self, width=5, height=4, dpi=100)
+        self.ai_canvas.hide() # Başlangıçta gizli
+        layout.addWidget(self.ai_canvas)
+
+        # --- METİN ALANI ---
+        self.ai_result_box = QLabel("Analiz seçiniz...")
+        self.ai_result_box.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.ai_result_box.setStyleSheet("color: #ccc; padding: 10px; font-size: 14px; background:#1a1a1a;")
+        self.ai_result_box.setWordWrap(True)
+        layout.addWidget(self.ai_result_box)
+        
+        layout.addStretch()
+        self.tabs.addTab(w, "🧠 Void AI")
+
+    # --- AKSİYONLAR ---
+
+    def action_forecast_graph(self):
+        """Tahminleri Grafik Olarak Çizer"""
+        data, msg = self.ai.get_forecast_data(7)
+        
+        if not data:
+            self.ai_result_box.setText(f"Veri Yok: {msg}")
+            self.ai_canvas.hide()
+            return
+            
+        # Grafiği Görünür Yap
+        self.ai_canvas.show()
+        self.ai_canvas.axes.clear()
+        
+        # Geçmiş (Mavi)
+        hist_dates, hist_vals = data['history']
+        self.ai_canvas.axes.plot(hist_dates, hist_vals, label='Geçmiş', color='#0a84ff', marker='o')
+        
+        # Gelecek (Kesikli Çizgi - Mor)
+        future_dates, future_vals = data['forecast']
+        # Çizgiyi birleştirmek için son geçmiş veriyi ekle
+        if hist_dates and future_dates:
+            connect_dates = [hist_dates[-1], future_dates[0]]
+            connect_vals = [hist_vals[-1], future_vals[0]]
+            self.ai_canvas.axes.plot(connect_dates, connect_vals, color='#e040fb', linestyle='--')
+            
+        self.ai_canvas.axes.plot(future_dates, future_vals, label='AI Tahmini', color='#e040fb', linestyle='--', marker='x')
+        
+        self.ai_canvas.axes.legend()
+        self.ai_canvas.axes.grid(True, color='#333')
+        self.ai_canvas.axes.set_title("Satış Trendi ve AI Tahmini", color='white')
+        self.ai_canvas.axes.tick_params(colors='white')
+        self.ai_canvas.draw()
+        
+        total_est = sum(future_vals)
+        self.ai_result_box.setText(f"📊 Grafik oluşturuldu. Gelecek 7 gün için tahmini ciro: {total_est:.2f} ₺")
+
+    def action_busy_hours(self):
+        self.ai_canvas.hide() # Grafiği gizle
+        res = self.ai.analyze_busy_hours()
+        if not res:
+            self.ai_result_box.setText("Yetersiz zaman verisi.")
+            return
+            
+        html = f"""
+        <h3 style='color:#ffcc00'>⏰ En Yoğun Saatler</h3>
+        <p><b>Zirve Saati:</b> {res['busiest_hour']}</p>
+        <p><b>İşlem Sayısı:</b> {res['transaction_count']}</p>
+        <p style='color:#30d158; font-size:16px'><b>💡 AI Tavsiyesi:</b> {res['advice']}</p>
+        """
+        self.ai_result_box.setText(html)
+
+    def action_discounts(self):
+        self.ai_canvas.hide()
+        suggestions = self.ai.suggest_discounts() # Artık (mesaj, renk) listesi dönüyor
+        
+        if not suggestions:
+            self.ai_result_box.setText("✅ Ölü stok veya riskli ürün bulunamadı.")
+            return
+            
+        html = "<h3>📉 Kâr Odaklı İndirim Önerileri</h3><ul>"
+        for msg, color in suggestions:
+            html += f"<li style='color:{color}; font-size:14px; margin-bottom:5px;'>{msg}</li>"
+        html += "</ul>"
+        self.ai_result_box.setText(html)
+
+    def action_bundles(self):
+        self.ai_canvas.hide()
+        bundles = self.ai.suggest_bundles()
+        
+        if not bundles:
+            self.ai_result_box.setText("Henüz kampanya önerisi için yeterli satış verisi yok.")
+            return
+            
+        html = "<h3 style='color:#0a84ff'>🎁 Akıllı Paket (Bundle) Önerileri</h3>"
+        html += "<p>Müşterilerin alışveriş alışkanlıklarına göre hazırlanan fırsat paketleri:</p><ul>"
+        for b in bundles:
+            html += f"<li style='margin-bottom:10px;'>{b}</li>"
+        html += "</ul>"
+        self.ai_result_box.setText(html)
+
+    def action_fraud(self):
+        self.ai_canvas.hide()
+        # Eski action_fraud kodunu buraya taşıyın
+        data = self.ai.detect_anomalies()
+        if not data: 
+            self.ai_result_box.setText("✅ Güvenlik taraması temiz.")
+            return
+        html = "<h3>🚨 Şüpheli İşlemler</h3><ul>"
+        for row in data:
+            html += f"<li>Tutar: {row[1]} ₺ - Tarih: {row[2]}</li>"
+        html += "</ul>"
+        self.ai_result_box.setText(html)
+        
     def load_product_to_form(self, pid):
         """Seçilen ürünü düzenleme formuna yükler"""
         product = self.db.get_product_by_id(pid)
