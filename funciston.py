@@ -31,10 +31,218 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QGridLayout, QScrollArea, QGraphicsDropShadowEffect,
                                QComboBox, QProgressDialog, QTabWidget, QMenu, QInputDialog,
                                QSplitter, QAbstractItemView, QButtonGroup, QSizePolicy, QGroupBox,
-                               QDoubleSpinBox, QFileDialog,QStackedWidget)
+                               QDoubleSpinBox, QFileDialog,QStackedWidget,QColorDialog)
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QFont, QCursor, QPixmap, QColor
 
+
+# TEMA YÖNETİCİSİ 
+
+class ThemeManager:
+    # Varsayılan Renkler
+    DEFAULTS = {
+        "bg_main": "#2b2b2b",       
+        "bg_panel": "#333333",      
+        "bg_secondary": "#404040",  
+        "text_primary": "#ffffff",  
+        "text_secondary": "#bbbbbb",
+        "accent": "#3a86ff",        
+        "success": "#2a9d8f",       
+        "error": "#e63946",         
+        "warning": "#fb8500",       
+        "border": "#555555",        
+        "highlight": "#ffffff"
+    }
+
+    def __init__(self, filename="theme.json"):
+        self.filename = filename
+        self.current_theme = self.load_theme()
+
+    def load_theme(self):
+        if os.path.exists(self.filename):
+            try:
+                with open(self.filename, 'r') as f:
+                    return {**self.DEFAULTS, **json.load(f)}
+            except:
+                pass
+        return self.DEFAULTS.copy()
+
+    def save_theme(self, new_theme):
+        self.current_theme = new_theme
+        with open(self.filename, 'w') as f:
+            json.dump(new_theme, f, indent=4)
+            
+    def reset_theme(self):
+        self.save_theme(self.DEFAULTS.copy())
+        return self.DEFAULTS.copy()
+
+    def get_stylesheet(self):
+        template = """
+            /* --- GENEL --- */
+            QMainWindow, QDialog {{ background-color: {bg_main}; }}
+            QWidget {{ font-family: 'Segoe UI', sans-serif; font-size: 15px; color: {text_primary}; }}
+            
+            /* Inputlar (Arama Çubuğu Dahil) */
+            QLineEdit, QComboBox, QDoubleSpinBox {{
+                background-color: {bg_secondary};
+                border: 1px solid {border};
+                border-radius: 8px;
+                padding: 8px;
+                color: {text_primary};
+                font-weight: bold;
+            }}
+            QLineEdit:focus {{ border: 1px solid {accent}; }}
+            
+            /* Tablo */
+            QTableWidget {{ background-color: {bg_panel}; gridline-color: {border}; border: none; font-size: 16px; }}
+            QTableWidget::item {{ padding: 8px; border-bottom: 1px solid {border}; }}
+            QTableWidget::item:selected {{ background-color: {accent}; color: white; }}
+            QHeaderView::section {{ background-color: {bg_secondary}; color: {text_primary}; border: none; padding: 6px; font-weight: bold; }}
+
+            /* Butonlar */
+            QPushButton {{
+                border-radius: 8px; padding: 10px; font-weight: bold;
+                border: 1px solid {border}; background-color: {bg_secondary}; color: {text_primary};
+            }}
+            QPushButton:hover {{ border: 1px solid {accent}; }}
+
+            /* --- ÖZEL KARTLAR --- */
+            QFrame#ProductCard {{ background-color: {bg_secondary}; border: 1px solid {border}; border-radius: 20px; }}
+            QFrame#ProductCard:hover {{ background-color: {bg_panel}; border: 1px solid {accent}; }}
+
+            QFrame#CategoryCard {{ background-color: {bg_secondary}; border: 1px solid {border}; border-radius: 24px; }}
+            QFrame#CategoryCard:hover {{ background-color: {bg_panel}; border: 1px solid {accent}; }}
+            
+            QFrame#CategoryCardAdd {{ background-color: rgba(48, 209, 88, 0.1); border: 1px dashed {success}; border-radius: 24px; }}
+
+            /* --- SAĞ PANEL VE BUTONLAR --- */
+            QPushButton#BtnCash {{ background-color: {success}; color: white; font-size: 24px; font-weight: 900; border: none; border-radius: 12px; }}
+            QPushButton#BtnCash:hover {{ background-color: #2ec4b6; }}
+            QPushButton#BtnCard {{ background-color: {accent}; color: white; font-size: 24px; font-weight: 900; border: none; border-radius: 12px; }}
+            QPushButton#BtnCard:hover {{ background-color: #4cc9f0; }}
+            QPushButton.DangerBtn {{ background-color: {error}; color: white; border: none; }}
+            QPushButton.TopBarBtn {{ background-color: {bg_secondary}; height: 45px; }}
+            QFrame#ChangeFrame {{ background-color: {bg_panel}; border-radius: 12px; border: 1px solid {border}; }}
+            QLabel.ChangeResult {{ color: {success}; font-weight: 900; font-size: 26px; }}
+
+            /* ▼▼▼ YENİ EKLENEN KISIM: ANA EKRAN PANELLERİ ▼▼▼ */
+            
+            /* Sol Panel (Ürünler) */
+            QFrame#LeftPanel {{
+                background-color: {bg_main}; 
+                border-right: 1px solid {border};
+            }}
+
+            /* Orta Panel (Sepet) */
+            QFrame#CenterPanel {{
+                background-color: {bg_panel};
+                border-right: 1px solid {border};
+            }}
+
+            /* Sağ Panel (Ödeme) */
+            QFrame#RightPanel {{
+                background-color: {bg_main};
+            }}
+            
+            /* Numpad Kutusu */
+            QWidget#NumpadContainer {{
+                background-color: {bg_secondary};
+                border-radius: 12px;
+                border: 1px solid {border};
+            }}
+        """
+        return template.format(**self.current_theme)
+
+# Global Nesneyi Oluştur (BU SATIR ÇOK ÖNEMLİ)
+theme_manager = ThemeManager()
+
+class ThemeEditor(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(50, 50, 50, 50)
+        
+        title = QLabel("Tema Kişiselleştirme")
+        title.setStyleSheet(f"font-size: 24px; font-weight: bold; color: {theme_manager.current_theme['accent']}; margin-bottom: 20px;")
+        title.setAlignment(Qt.AlignCenter)
+        self.layout.addWidget(title)
+
+        grid_widget = QWidget()
+        self.grid = QGridLayout(grid_widget)
+        self.grid.setSpacing(20)
+        self.buttons = {}
+        
+        self.labels_map = {
+            "bg_main": "Ana Arka Plan", "bg_panel": "Panel Rengi", "bg_secondary": "Buton Rengi",
+            "text_primary": "Yazı Rengi", "accent": "Vurgu (Mavi)", "success": "Yeşil/Nakit",
+            "error": "Kırmızı/Sil", "warning": "Uyarı", "border": "Kenarlık"
+        }
+        
+        row, col = 0, 0
+        for key in list(self.labels_map.keys()):
+            container = QFrame()
+            container.setStyleSheet("background: #252525; border-radius: 10px; border: 1px solid #333;")
+            vbox = QVBoxLayout(container)
+            lbl = QLabel(self.labels_map[key])
+            lbl.setStyleSheet("color: #aaa; font-weight: bold; border: none;")
+            lbl.setAlignment(Qt.AlignCenter)
+            btn = QPushButton()
+            btn.setFixedHeight(40)
+            btn.setCursor(Qt.PointingHandCursor)
+            current_color = theme_manager.current_theme.get(key, "#000000")
+            self.update_btn_style(btn, current_color)
+            btn.clicked.connect(lambda _, k=key, b=btn: self.pick_color(k, b))
+            vbox.addWidget(lbl)
+            vbox.addWidget(btn)
+            self.grid.addWidget(container, row, col)
+            self.buttons[key] = btn
+            col += 1
+            if col > 2: col, row = 0, row + 1
+        
+        self.layout.addWidget(grid_widget)
+        self.layout.addStretch()
+
+        action_layout = QHBoxLayout()
+        btn_save = QPushButton("💾 KAYDET VE UYGULA")
+        btn_save.setFixedHeight(50)
+        btn_save.setProperty("class", "SuccessBtn")
+        btn_save.clicked.connect(self.apply_changes)
+        btn_reset = QPushButton("♻️ VARSAYILANA DÖN")
+        btn_reset.setFixedHeight(50)
+        btn_reset.clicked.connect(self.reset_defaults)
+        
+        action_layout.addWidget(btn_save, stretch=2)
+        action_layout.addWidget(btn_reset, stretch=1)
+        self.layout.addLayout(action_layout)
+
+    def update_btn_style(self, btn, color):
+        btn.setText(color)
+        btn.setStyleSheet(f"background-color: {color}; color: white; border: 1px solid #555; border-radius: 5px; font-weight: bold;")
+
+    def pick_color(self, key, btn):
+        color = QColorDialog.getColor(initial=QColor(btn.text()), parent=self, title=self.labels_map[key])
+        if color.isValid():
+            hex_color = color.name()
+            theme_manager.current_theme[key] = hex_color
+            self.update_btn_style(btn, hex_color)
+
+    def apply_changes(self):
+        theme_manager.save_theme(theme_manager.current_theme)
+        app = QApplication.instance()
+        app.setStyleSheet(theme_manager.get_stylesheet())
+        for widget in app.allWidgets():
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+            widget.update()
+        QMessageBox.information(self, "Başarılı", "Renkler güncellendi!")
+
+    def reset_defaults(self):
+        defaults = theme_manager.reset_theme()
+        for key, btn in self.buttons.items():
+            if key in defaults:
+                theme_manager.current_theme[key] = defaults[key]
+                self.update_btn_style(btn, defaults[key])
+        self.apply_changes()
 # =====================================================
 # AYARLAR
 # =====================================================
@@ -473,114 +681,98 @@ class PaymentWorker(QThread):
 
 
 #CSS
-STYLESHEET = """
-    QMainWindow { background-color: #121212; }
-    QWidget { font-family: 'Segoe UI', sans-serif; color: #e0e0e0; outline: none; }
+# =====================================================
+# DİNAMİK STYLESHEET (TEMPLATE)
+# =====================================================
+STYLESHEET_TEMPLATE = """
+    /* GENEL AYARLAR */
+    QMainWindow {{ background-color: {bg_main}; }}
+    QDialog {{ background-color: {bg_main}; }}
+    QWidget {{ font-family: 'Segoe UI', 'Helvetica Neue', sans-serif; color: {text_primary}; font-size: 14px; }}
     
-    /* SCROLLBAR */
-    QScrollBar:vertical { background: #252525; width: 8px; margin: 0; border-radius: 4px; }
-    QScrollBar::handle:vertical { background: #404040; min-height: 30px; border-radius: 4px; }
-    
-    /* TABLO (SEPET) - DAHA BÜYÜK VE MODERN */
-    QTableWidget { 
-        background-color: #1e1e1e; 
+    /* INPUT ALANLARI (Yumuşak Köşeler) */
+    QLineEdit, QComboBox, QDoubleSpinBox {{ 
+        background-color: {bg_secondary}; 
+        color: {text_primary}; 
+        border: 1px solid {border}; 
+        padding: 8px; 
+        border-radius: 8px; 
+    }}
+    QLineEdit:focus {{ border: 1px solid {accent}; }}
+
+    /* TABLO (SEPET) */
+    QTableWidget {{ 
+        background-color: {bg_panel}; 
         border-radius: 12px; 
+        border: 1px solid {border};
+        gridline-color: {border}; 
+    }}
+    QTableWidget::item {{ border-bottom: 1px solid {border}; padding: 10px; }}
+    QTableWidget::item:selected {{ background-color: {accent}; color: white; }}
+    QHeaderView::section {{ 
+        background-color: {bg_secondary}; 
+        color: {text_primary}; 
         border: none; 
-        color: #fff; 
-        gridline-color: #303030; 
-        font-size: 18px; /* Font büyütüldü */
-        padding: 5px; 
-    }
-    QTableWidget::item { 
-        padding: 15px; /* Satır aralığı açıldı */
-        border-bottom: 1px solid #303030; 
-    }
-    QTableWidget::item:selected { 
-        background-color: #0a84ff; 
-        color: #fff; 
-        border-radius: 8px;
-    }
-    QHeaderView::section { 
-        background-color: #1e1e1e; 
-        color: #888; 
-        border: none; 
-        border-bottom: 2px solid #404040; 
-        padding: 10px; 
+        padding: 8px; 
         font-weight: bold; 
-        font-size: 14px; 
-    }
+    }}
+
+    /* --- BUTON SINIFLARI --- */
     
-    /* SPLITTER (AYIRAÇ) */
-    QSplitter::handle { 
-        background-color: #333; 
-        height: 4px; /* Tutamaç kalınlaştırıldı */
-        margin: 2px;
-    }
-    QSplitter::handle:hover { 
-        background-color: #0a84ff; 
-    }
-
-    /* KATEGORİ KUTULARI */
-    QPushButton.CatBoxBtn { 
-        background-color: #252525; color: #e0e0e0; border: 1px solid #333; 
-        border-radius: 12px; font-size: 16px; font-weight: bold; margin: 4px; 
-        min-height: 70px; 
-    }
-    QPushButton.CatBoxBtn:hover { background-color: #333; border: 1px solid #555; }
-    QPushButton.CatBoxBtn:pressed { background-color: #0a84ff; color: white; border: 1px solid #0a84ff; }
-
-    /* CİRO KUTUSU (TIKLANABİLİR) */
-    QLabel#CiroBox {
-        background-color: #252525; color: #30d158; border: 1px solid #333;
-        border-radius: 16px; font-weight: bold; font-size: 18px; padding: 8px 15px;
-    }
-    QLabel#CiroBox:hover { 
-        border: 1px solid #30d158; cursor: pointer;
-    }
-
-    /* ÜST BAR BUTONLARI */
-    QPushButton.TopBarBtn { background-color: #252525; color: #e0e0e0; border: 1px solid #333; border-radius: 16px; font-weight: bold; font-size: 13px; padding: 0 15px; height: 45px; }    
-    /* BAŞLIKLAR */
-    QLabel#SectionTitle { color: #808080; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; margin: 5px; }
-    
-    /* NUMPAD */
-    QWidget#NumpadContainer { background-color: #252525; border-radius: 12px; border: 1px solid #333; }
-    QPushButton.NumBtn { background-color: transparent; color: white; font-size: 26px; font-weight: 400; border: 0.5px solid #333; border-radius: 0px; height: 65px; }
-    QPushButton.NumBtn:hover { background-color: #353535; }
-    QPushButton.NumBtn:pressed { background-color: #0a84ff; color: white; }
-    
-    /* ÖDEME BUTONLARI */
-    QPushButton.PayBtn { border-radius: 12px; font-size: 22px; font-weight: 800; color: white; }
-
-    /* SAĞ PANEL - PARA ÜSTÜ LİSTESİ */
-    QLabel.ChangeDenom {
-        color: #aaaaaa;
-        font-size: 16px;
+    /* Tüm Butonlar İçin Ortak Ayar (Köşeleri Yumuşat) */
+    QPushButton {{
+        border-radius: 10px;
         font-weight: bold;
-        font-family: 'Consolas', 'Courier New', monospace;
-    }
-    QLabel.ChangeArrow {
-        color: #555555;
-        font-size: 16px;
-        font-weight: bold;
-    }
-    QLabel.ChangeResult {
-        color: #30d158; /* Yeşil Sonuç */
-        font-size: 22px;
+        border: 1px solid {border};
+    }}
+
+    /* ÖDEME BUTONLARI (Nakit/Kart) - BÜYÜK VE BELİRGİN */
+    QPushButton.PayBtn {{
+        font-size: 24px;
         font-weight: 900;
-        font-family: 'Consolas', 'Courier New', monospace;
-    }
-    QLabel.ChangeResultError {
-        color: #444; /* Sönük */
-        font-size: 16px;
-        font-style: italic;
-        font-family: 'Consolas', 'Courier New', monospace;
-    }
-    QFrame#ChangeFrame {
-        background-color: #202020;
-        border-radius: 12px;
-        border: 1px solid #333;
-    }
+        border-radius: 15px;
+        padding: 10px;
+        border: none;
+    }}
+    
+    /* Standart Filtre Butonları */
+    QPushButton.FilterBtn {{ 
+        background-color: {bg_secondary}; 
+        color: {text_primary}; 
+        padding: 8px 15px; 
+    }}
+    QPushButton.FilterBtn:checked {{ background-color: {accent}; color: white; border: 1px solid {accent}; }}
+
+    /* Başarılı (Yeşil) Buton */
+    QPushButton.SuccessBtn {{ 
+        background-color: {success}; color: #000000; border: none;
+    }}
+    QPushButton.SuccessBtn:hover {{ background-color: #28b84d; }}
+
+    /* Birincil (Mavi) Buton */
+    QPushButton.PrimaryBtn {{ 
+        background-color: {accent}; color: white; border: none;
+    }}
+    QPushButton.PrimaryBtn:hover {{ background-color: #0060df; }}
+
+    /* Silme/Hata (Kırmızı) Buton */
+    QPushButton.DangerBtn {{ 
+        background-color: {error}; color: white; border: none;
+    }}
+    QPushButton.DangerBtn:hover {{ background-color: #d32f2f; }}
+
+    /* Kategori Kartları */
+    QPushButton.CatBoxBtn {{ 
+        background-color: {bg_secondary}; 
+        color: {text_primary}; 
+        border: 1px solid {border}; 
+        border-radius: 12px; 
+        font-size: 16px; 
+    }}
+    
+    /* SAĞ PANEL (Para Üstü vb.) */
+    QFrame#ChangeFrame {{ background-color: {bg_panel}; border-radius: 12px; border: 1px solid {border}; }}
+    QLabel.ChangeResult {{ color: {success}; font-weight: 900; font-size: 24px; }}
 """
 
 # --- VERİTABANI ---
@@ -1044,10 +1236,10 @@ class ProductCard(QFrame):
             font_p_sz = 20
         
         self.setCursor(Qt.PointingHandCursor)
-        self.setStyleSheet(f"""
-            QFrame {{ background-color: #252525; border-radius: 20px; border: 1px solid {'#ff453a' if stock <= 5 else '#353535'}; }}
-            QFrame:hover {{ background-color: #303030; border: 1px solid #0a84ff; }}
-        """)
+        self.setCursor(Qt.PointingHandCursor)
+        
+        # Stil dosyasındaki #ProductCard kuralını kullanmasını söylüyoruz
+        self.setObjectName("ProductCard")
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
@@ -1287,20 +1479,12 @@ class CategoryCard(QFrame):
         self.cb = click_cb
         
         if is_add_button:
-            # Ekleme Butonu 
-            self.setStyleSheet("""
-                QFrame { background-color: rgba(48, 209, 88, 0.1); border-radius: 24px; border: 1px dashed #30d158; }
-                QFrame:hover { background-color: rgba(48, 209, 88, 0.2); }
-            """)
+            self.setObjectName("CategoryCardAdd") # Stil dosyasından alacak
             lbl_color = "#414e44"
             icon_text = "+"
             font_size = "32px"
         else:
-            # Normal Kategori 
-            self.setStyleSheet("""
-                QFrame { background-color: #252525; border-radius: 24px; border: 1px solid #333; }
-                QFrame:hover { background-color: #303030; border: 1px solid #0a84ff; }
-            """)
+            self.setObjectName("CategoryCard")    # Stil dosyasından alacak
             lbl_color = "#45525e"
             icon_text = name[0].upper() if name else "?"
             font_size = "24px"
@@ -1634,7 +1818,7 @@ class AIService:
             return None
 
 class VoidAI_Engine:
-    def __init__(self, csv_yolu="urunler_klasoru/urunler.csv"):
+    def __init__(self, csv_yolu="/Users/emircancancelik/py_projects/urunler_temiz.csv"):
         # Dosya yolunu kendine göre düzeltmeyi unutma!
         self.csv_yolu = csv_yolu
 
@@ -1752,7 +1936,6 @@ class NexusPOS(QMainWindow):
         self.init_ui()
         self.setWindowTitle("VoidPOS")
         self.resize(1600, 900)
-        self.setStyleSheet(STYLESHEET)
         self.ai = AIService("voidpos.db")
         # Klasör yoksa oluştur
         if not os.path.exists("urunler_klasoru"):
@@ -1772,7 +1955,7 @@ class NexusPOS(QMainWindow):
         # --- 1. SOL PANEL (AYNI) ---
         left_container = QFrame()
         left_container.setFixedWidth(520)
-        left_container.setStyleSheet("background:#181818; border-right:1px solid #252525;")
+        left_container.setObjectName("LeftPanel")
         left_layout = QVBoxLayout(left_container)
         
         # Arama
@@ -1781,7 +1964,6 @@ class NexusPOS(QMainWindow):
         self.search_bar = QLineEdit()
         self.search_bar.setPlaceholderText("🔍 Ürün Ara...")
         self.search_bar.setFixedHeight(40)
-        self.search_bar.setStyleSheet("background:#252525; color:white; border:1px solid #333; border-radius:20px; padding-left:15px;")
         self.search_bar.textChanged.connect(self.on_search_changed)
         search_lay.addWidget(self.search_bar)
         left_layout.addWidget(search_cont)
@@ -1800,7 +1982,7 @@ class NexusPOS(QMainWindow):
         # --- 2. ORTA PANEL (MODERN SEPET) ---
         center_container = QFrame()
         # border-right ile sağ paneli ayırıyoruz ama kendi etrafında kutu yok
-        center_container.setStyleSheet("background:#1a1a1a; border-right:1px solid #333;")
+        center_container.setObjectName("CenterPanel")        
         center_layout = QVBoxLayout(center_container)
         center_layout.setContentsMargins(10, 20, 10, 10) # Üstten biraz boşluk
         
@@ -1856,7 +2038,7 @@ class NexusPOS(QMainWindow):
         # --- 3. SAĞ PANEL (AYNI) ---
         right_container = QFrame()
         right_container.setFixedWidth(400)
-        right_container.setStyleSheet("background:#161616;")
+        right_container.setObjectName("RightPanel")
         right_layout = QVBoxLayout(right_container)
         
         self.change_panel = self.create_change_list_panel()
@@ -1865,15 +2047,22 @@ class NexusPOS(QMainWindow):
         self.numpad = MergedNumpad(self.numpad_action)
         right_layout.addWidget(self.numpad, stretch=0)
         
+
         pay_lay = QHBoxLayout()
+        pay_lay.setSpacing(15) # Butonlar arası boşluk
+        
+        # NAKİT BUTONU
         btn_cash = QPushButton("NAKİT")
-        btn_cash.setProperty("class", "PayBtn")
-        btn_cash.setStyleSheet("background-color:#30d158; color:black; height: 80px;")
+        btn_cash.setObjectName("BtnCash")  # <--- CSS'teki #BtnCash buna bağlanır
+        btn_cash.setFixedHeight(90)        # <--- Yükseklik veriyoruz ki kaybolmasın
+        btn_cash.setCursor(Qt.PointingHandCursor)
         btn_cash.clicked.connect(lambda: self.finish_sale("Nakit"))
         
+        # KART BUTONU
         btn_card = QPushButton("KART")
-        btn_card.setProperty("class", "PayBtn")
-        btn_card.setStyleSheet("background-color:#0a84ff; color:white; height: 80px;")
+        btn_card.setObjectName("BtnCard")  # <--- CSS'teki #BtnCard buna bağlanır
+        btn_card.setFixedHeight(90)        # <--- Yükseklik veriyoruz
+        btn_card.setCursor(Qt.PointingHandCursor)
         btn_card.clicked.connect(self.card_payment)
         
         pay_lay.addWidget(btn_cash)
@@ -1910,13 +2099,7 @@ class NexusPOS(QMainWindow):
         # CSS ile çizgileri yönetiyoruz
         # border: none -> Tablo çerçevesi yok
         # QHeaderView::section -> Başlık altındaki çizgi hariç kenarlık yok
-        table.setStyleSheet("""
-            QTableWidget { background-color: transparent; border: none; color: #ddd; font-size: 16px; }
-            QTableWidget::item { padding: 12px 5px; border-bottom: 1px solid #2a2a2a; } /* Hafif satır çizgisi */
-            QTableWidget::item:selected { background-color: #252525; color: #fff; border-radius: 5px; }
-            QHeaderView::section { background-color: transparent; color: #666; border: none; border-bottom: 2px solid #333; font-weight: bold; font-size: 13px; }
-            QLineEdit { background: #333; color: white; border: 1px solid #0a84ff; border-radius: 5px; }
-        """)
+        table.setStyleSheet("background-color: transparent; border: none;")
 
         table.itemChanged.connect(self.on_cart_item_changed)
         table.itemClicked.connect(self.row_selected)
@@ -2055,7 +2238,6 @@ class NexusPOS(QMainWindow):
             def on_click(n, p):
                 self.add_to_cart(n, p)
             
-            # ProductCard oluştur
             card = ProductCard(pid, name, price, img, fav, stock, on_click, lambda: self.load_products_grid(category_name), self.db, is_mini=True)
             # Boyutu biraz ayarlayalım ızgaraya sığsın
             card.setFixedSize(140, 160) 
@@ -2693,38 +2875,46 @@ class NexusPOS(QMainWindow):
 # YÖNETİM PANELİ
 # ==========================================
 class AdminDialog(QDialog):
-    # AdminDialog sınıfının __init__ metodunu şu şekilde sadeleştirin:
     def __init__(self, db, parent=None):
         super().__init__(parent)
         self.db = db
         self.setWindowTitle("Yönetim Paneli")
-        self.resize(1200, 800) # Biraz daha genişletelim
-        self.setStyleSheet("background:#1a1a1a; color:white;")
-        self.setup_ai_center()
+        self.resize(1200, 800)
+
+        # --- DÜZELTME BURADA BAŞLIYOR ---
+        
+        # 1. Önce Layout ve Tabs OLUŞTURULMALI
         layout = QVBoxLayout(self)
         
-        # Sekmeler
         self.tabs = QTabWidget()
-        # Sekme değişince veriyi yükle diyeceğiz
+        # Sekme değiştiğinde veriyi yenilemek için sinyal:
         self.tabs.currentChanged.connect(self.on_tab_change) 
+        
         layout.addWidget(self.tabs)
         
+        # 2. Değişkenleri Tanımla
         self.editing_pid = None
         self.filter_mode = 'day'
         self.last_tab_index = 0
+
+        # 3. ŞİMDİ Setup Fonksiyonlarını Çağırabiliriz (Çünkü self.tabs artık var)
+        self.setup_ai_center()            # Void AI
+        self.setup_finances()             # Tab 0 (Finans)
+        self.setup_sales_history()        # Tab 1 (Geçmiş)
+        self.setup_prod_list()            # Tab 2 (Liste)
+        self.setup_add_prod()             # Tab 3 (Ekle)
+        self.setup_stock_tracking()       # Tab 4 (Stok)
+        self.setup_pending_transactions() # Tab 5 (Bekleyen)
+        self.setup_bulk_operations()      # Tab 6 (Toplu İşlem)
+        self.setup_theme_settings()       # Tab 7 (Tema - Yeni Eklediğimiz)
         
-        # ARAYÜZLERİ KURUYORUZ AMA VERİLERİ HENÜZ YÜKLEMİYORUZ!
-        self.setup_finances()             # Tab 0
-        self.setup_sales_history()        # Tab 1
-        self.setup_prod_list()            # Tab 2
-        self.setup_add_prod()             # Tab 3
-        self.setup_stock_tracking()       # Tab 4
-        self.setup_pending_transactions() # Tab 5
-        self.setup_bulk_operations()      # Tab 6
+        # 4. İlk veriyi yükle
         self.load_finance_data()
+        
 
-
-    # AdminDialog Sınıfı İçinde:
+    def setup_theme_settings(self):
+        editor = ThemeEditor(self)
+        self.tabs.addTab(editor, "🎨 Tema Ayarları")
 
     def setup_ai_center(self):
         self.ai = AIService(self.db.db_name)
@@ -2889,10 +3079,7 @@ class AdminDialog(QDialog):
         self.lbl_form_title.setStyleSheet("font-size: 22px; font-weight: bold; color: #ff9f0a;") # Turuncu başlık
         
         self.btn_save.setText("GÜNCELLE")
-        self.btn_save.setStyleSheet("""
-            QPushButton { background-color: #ff9f0a; color: black; font-weight: bold; font-size: 16px; border-radius: 10px; }
-            QPushButton:hover { background-color: #e08e0b; }
-        """)
+        self.btn_save.setProperty("class", "SuccessBtn")
         
         # Sekmeyi "Ürün Ekle / Düzenle"ye (Index 3) kaydır
         self.tabs.setCurrentIndex(3)
@@ -3346,7 +3533,7 @@ class AdminDialog(QDialog):
             # Sil Butonu
             btn_del = QPushButton("SİL")
             btn_del.setCursor(Qt.PointingHandCursor)
-            btn_del.setStyleSheet("background-color: #ff453a; color: white; font-weight: bold; border-radius: 4px;")
+            btn_del.setProperty("class", "DangerBtn")            
             btn_del.clicked.connect(lambda _, pid=row[0]: self.delete_product(pid))
             self.table.setCellWidget(r_idx, 6, btn_del)
 
@@ -3862,11 +4049,12 @@ if __name__ == "__main__":
     from PySide6.QtWidgets import QFormLayout
     app = QApplication(sys.argv)
     
-    # macOS için sistem fontunu kullanalım
     font = QFont(".AppleSystemUIFont", 13) 
-    # Veya manuel olarak: font = QFont("Helvetica Neue", 13)
-    
     app.setFont(font)    
+    
+    # Bu satır artık hata vermeyecek çünkü yukarıda tanımladık
+    app.setStyleSheet(theme_manager.get_stylesheet()) 
+
     window = NexusPOS()
     window.show()
     sys.exit(app.exec())
