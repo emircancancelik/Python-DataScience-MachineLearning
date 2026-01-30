@@ -31,321 +31,19 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QGridLayout, QScrollArea, QGraphicsDropShadowEffect,
                                QComboBox, QProgressDialog, QTabWidget, QMenu, QInputDialog,
                                QSplitter, QAbstractItemView, QButtonGroup, QSizePolicy, QGroupBox,
-                               QDoubleSpinBox, QFileDialog,QStackedWidget,QColorDialog)
+                               QDoubleSpinBox, QFileDialog,QStackedWidget)
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QFont, QCursor, QPixmap, QColor
 
 # =====================================================
-# AYARLAR VE KONFİGÜRASYON YÖNETİMİ
+# AYARLAR
 # =====================================================
-TEST_MODE = False
+TEST_MODE = False  
+POS_IP = "192.168.1.157"
+POS_PORT = 6420
 SHOP_NAME = "BAYİÇ ALCOHOL CENTER"
 ADMIN_USER = "admin"
 ADMIN_PASS = "123456"
-
-def get_app_path():
-    """
-    Program .exe olduğunda .exe'nin bulunduğu klasörü,
-    Python dosyasıyken .py dosyasının bulunduğu klasörü verir.
-    """
-    if getattr(sys, 'frozen', False):
-        # .exe olarak çalışıyorsa
-        return os.path.dirname(sys.executable)
-    else:
-        # Normal python dosyası olarak çalışıyorsa
-        return os.path.dirname(os.path.abspath(__file__))
-    
-def load_pos_config():
-    """pos_config.json dosyasından ayarları okur, yoksa oluşturur"""
-    config_file = os.path.join(get_app_path(), "pos_config.json")
-
-    defaults = {
-        "primary_ip": "192.168.1.157",
-        "primary_port": 6420,
-        "backup_ip": "192.168.1.158",
-        "backup_port": 9100,
-        "pos_type": "auto",
-        "timeout": 60,
-        "auto_detect": True
-    }
-    
-    if not os.path.exists(config_file):
-        try:
-            with open(config_file, "w") as f:
-                json.dump(defaults, f, indent=4)
-            print(f"✅ {config_file} oluşturuldu.")
-        except Exception as e:
-            print(f"❌ Config dosyası oluşturulamadı: {e}")
-        return defaults
-        
-    try:
-        with open(config_file, "r") as f:
-            config = json.load(f)
-            print("✅ POS Ayarları dosyadan yüklendi.")
-            return config
-    except Exception as e:
-        print(f"⚠️ Config dosyası okunamadı, varsayılanlar kullanılıyor: {e}")
-        return defaults
-
-# Ayarları yükle ve global değişkenlere ata
-POS_CONFIG = load_pos_config()
-POS_IP = POS_CONFIG.get("primary_ip", "192.168.1.157")
-POS_PORT = POS_CONFIG.get("primary_port", 6420)
-POS_TIMEOUT = POS_CONFIG.get("timeout", 60)
-
-
-    
-# TEMA YÖNETİCİSİ 
-
-class ThemeManager:
-    # Varsayılan Renkler (Apple Dark Mode Tarzı)
-    DEFAULTS = {
-        "bg_main": "#121212",
-        "bg_panel": "#1e1e1e",
-        "bg_secondary": "#252525",
-        "text_primary": "#e0e0e0",
-        "text_secondary": "#aaaaaa",
-        "accent": "#0a84ff",
-        "success": "#30d158",
-        "error": "#ff453a",
-        "warning": "#ff9f0a",
-        "border": "#333333",
-        "highlight": "#ffffff"
-    }
-
-    def __init__(self, filename="theme.json"):
-        self.filename = os.path.join(get_app_path(), filename)
-        self.current_theme = self.load_theme()
-
-    def load_theme(self):
-        # Dosya varsa oku, yoksa varsayılanı dön
-        if os.path.exists(self.filename):
-            try:
-                with open(self.filename, 'r') as f:
-                    return {**self.DEFAULTS, **json.load(f)}
-            except:
-                pass
-        return self.DEFAULTS.copy()
-
-    def save_theme(self, new_theme):
-        self.current_theme = new_theme
-        with open(self.filename, 'w') as f:
-            json.dump(new_theme, f, indent=4)
-            
-    def reset_theme(self):
-        self.save_theme(self.DEFAULTS.copy())
-        return self.DEFAULTS.copy()
-
-    def get_stylesheet(self):
-        # DİKKAT: CSS parantezleri {{ }} çift, değişkenler { } tek.
-        template = """
-            /* --- GENEL --- */
-            QMainWindow, QDialog {{ background-color: {bg_main}; }}
-            QWidget {{ font-family: 'Segoe UI', sans-serif; font-size: 15px; color: {text_primary}; outline: none; }}
-            
-            /* SCROLLBAR */
-            QScrollBar:vertical {{ background: {bg_main}; width: 8px; margin: 0; }}
-            QScrollBar::handle:vertical {{ background: {bg_secondary}; min-height: 30px; border-radius: 4px; }}
-
-            /* Inputlar */
-            QLineEdit, QComboBox, QDoubleSpinBox {{
-                background-color: {bg_secondary};
-                border: 1px solid {border};
-                border-radius: 8px;
-                padding: 8px;
-                color: {text_primary};
-                font-weight: bold;
-            }}
-            QLineEdit:focus {{ border: 1px solid {accent}; }}
-            
-            /* Tablo */
-            QTableWidget {{ background-color: {bg_panel}; gridline-color: {border}; border: none; font-size: 16px; }}
-            QTableWidget::item {{ padding: 8px; border-bottom: 1px solid {border}; }}
-            QTableWidget::item:selected {{ background-color: {accent}; color: white; }}
-            QHeaderView::section {{ background-color: {bg_secondary}; color: {text_primary}; border: none; padding: 6px; font-weight: bold; }}
-
-            /* Butonlar Genel */
-            QPushButton {{
-                border-radius: 8px; padding: 10px; font-weight: bold;
-                border: 1px solid {border}; background-color: {bg_secondary}; color: {text_primary};
-            }}
-            QPushButton:hover {{ border: 1px solid {accent}; }}
-
-            /* --- ÜRÜN KARTLARI (GÜNCELLENDİ: KENARLIK VE MENÜ) --- */
-            QFrame#ProductCard {{ 
-                background-color: {bg_secondary}; 
-                border: 1px solid #3a3a3c; /* İnce Gri Kenarlık */
-                border-radius: 16px; 
-            }}
-            QFrame#ProductCard:hover {{ 
-                background-color: {bg_panel}; 
-                border: 1px solid {accent}; /* Mavi Parlama */
-            }}
-
-            /* --- KATEGORİ KARTLARI (GÜNCELLENDİ) --- */
-            
-            /* 1. Normal Kategori */
-            QFrame#CategoryCard_Normal {{
-                background-color: {bg_secondary}; 
-                border-radius: 16px;
-                border: 1px solid #3a3a3c; /* İnce Gri Kenarlık */
-            }}
-            QFrame#CategoryCard_Normal:hover {{
-                background-color: {bg_panel}; 
-                border: 1px solid {accent};
-            }}
-
-            /* 2. Tüm Ürünler Kartı (Mavi Gradyan) */
-            QFrame#CategoryCard_All {{
-                background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #007aff, stop:1 #0056b3);
-                border-radius: 16px;
-                border: 1px solid rgba(255, 255, 255, 0.3);
-            }}
-            QFrame#CategoryCard_All:hover {{
-                background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {accent}, stop:1 #006ddb);
-                border: 1px solid white;
-            }}
-
-            /* 3. Ekleme Kartı */
-            QFrame#CategoryCard_Add {{
-                background-color: rgba(48, 209, 88, 0.05);
-                border-radius: 16px;
-                border: 2px dashed {success};
-            }}
-            QFrame#CategoryCard_Add:hover {{
-                background-color: rgba(48, 209, 88, 0.15);
-            }}
-
-            /* Kart Yazıları */
-            QFrame#CategoryCard_Normal QLabel, QFrame#CategoryCard_All QLabel, QFrame#CategoryCard_Add QLabel {{
-                font-family: 'Segoe UI', sans-serif;
-            }}
-
-            /* --- SAĞ PANEL VE BUTONLAR --- */
-            QPushButton#BtnCash {{ background-color: {success}; color: black; font-size: 24px; font-weight: 900; border: none; border-radius: 12px; }}
-            QPushButton#BtnCash:hover {{ background-color: #2ec4b6; }}
-            
-            QPushButton#BtnCard {{ background-color: {accent}; color: white; font-size: 24px; font-weight: 900; border: none; border-radius: 12px; }}
-            QPushButton#BtnCard:hover {{ background-color: #4cc9f0; }}
-            
-            QPushButton.DangerBtn {{ background-color: {error}; color: white; border: none; }}
-            QPushButton.TopBarBtn {{ background-color: {bg_secondary}; height: 45px; }}
-            
-            QFrame#ChangeFrame {{ background-color: {bg_panel}; border-radius: 12px; border: 1px solid {border}; }}
-            QLabel.ChangeResult {{ color: {success}; font-weight: 900; font-size: 26px; }}
-            QLabel.ChangeResultError {{ color: #444; font-size: 16px; }}
-
-            /* PANELLER */
-            QFrame#LeftPanel {{ background-color: {bg_main}; border-right: 1px solid {border}; }}
-            QFrame#CenterPanel {{ background-color: {bg_panel}; border-right: 1px solid {border}; }}
-            QFrame#RightPanel {{ background-color: {bg_main}; }}
-            
-            /* Numpad */
-            QWidget#NumpadContainer {{
-                background-color: {bg_secondary};
-                border-radius: 12px;
-                border: 1px solid {border};
-            }}
-            QPushButton.NumBtn {{ background-color: transparent; font-size: 24px; border: 1px solid {border}; }}
-            QPushButton.NumBtn:hover {{ background-color: {bg_panel}; }}
-            QPushButton.NumBtn:pressed {{ background-color: {accent}; color: white; }}
-        """
-        return template.format(**self.current_theme)
-
-# Global Nesneyi Oluştur (ÖNEMLİ)
-theme_manager = ThemeManager()
-
-class ThemeEditor(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(50, 50, 50, 50)
-        
-        title = QLabel("Tema Kişiselleştirme")
-        title.setStyleSheet(f"font-size: 24px; font-weight: bold; color: {theme_manager.current_theme['accent']}; margin-bottom: 20px;")
-        title.setAlignment(Qt.AlignCenter)
-        self.layout.addWidget(title)
-
-        grid_widget = QWidget()
-        self.grid = QGridLayout(grid_widget)
-        self.grid.setSpacing(20)
-        self.buttons = {}
-        
-        self.labels_map = {
-            "bg_main": "Ana Arka Plan", "bg_panel": "Panel Rengi", "bg_secondary": "Buton Rengi",
-            "text_primary": "Yazı Rengi", "accent": "Vurgu (Mavi)", "success": "Yeşil/Nakit",
-            "error": "Kırmızı/Sil", "warning": "Uyarı", "border": "Kenarlık"
-        }
-        
-        row, col = 0, 0
-        for key in list(self.labels_map.keys()):
-            container = QFrame()
-            container.setStyleSheet("background: #252525; border-radius: 10px; border: 1px solid #333;")
-            vbox = QVBoxLayout(container)
-            lbl = QLabel(self.labels_map[key])
-            lbl.setStyleSheet("color: #aaa; font-weight: bold; border: none;")
-            lbl.setAlignment(Qt.AlignCenter)
-            btn = QPushButton()
-            btn.setFixedHeight(40)
-            btn.setCursor(Qt.PointingHandCursor)
-            current_color = theme_manager.current_theme.get(key, "#000000")
-            self.update_btn_style(btn, current_color)
-            btn.clicked.connect(lambda _, k=key, b=btn: self.pick_color(k, b))
-            vbox.addWidget(lbl)
-            vbox.addWidget(btn)
-            self.grid.addWidget(container, row, col)
-            self.buttons[key] = btn
-            col += 1
-            if col > 2: col, row = 0, row + 1
-        
-        self.layout.addWidget(grid_widget)
-        self.layout.addStretch()
-
-        action_layout = QHBoxLayout()
-        btn_save = QPushButton("💾 KAYDET VE UYGULA")
-        btn_save.setFixedHeight(50)
-        btn_save.setProperty("class", "SuccessBtn")
-        btn_save.clicked.connect(self.apply_changes)
-        btn_reset = QPushButton("♻️ VARSAYILANA DÖN")
-        btn_reset.setFixedHeight(50)
-        btn_reset.clicked.connect(self.reset_defaults)
-        
-        action_layout.addWidget(btn_save, stretch=2)
-        action_layout.addWidget(btn_reset, stretch=1)
-        self.layout.addLayout(action_layout)
-
-    def update_btn_style(self, btn, color):
-        btn.setText(color)
-        btn.setStyleSheet(f"background-color: {color}; color: white; border: 1px solid #555; border-radius: 5px; font-weight: bold;")
-
-    def pick_color(self, key, btn):
-        color = QColorDialog.getColor(initial=QColor(btn.text()), parent=self, title=self.labels_map[key])
-        if color.isValid():
-            hex_color = color.name()
-            theme_manager.current_theme[key] = hex_color
-            self.update_btn_style(btn, hex_color)
-
-    def apply_changes(self):
-        theme_manager.save_theme(theme_manager.current_theme)
-        app = QApplication.instance()
-        app.setStyleSheet(theme_manager.get_stylesheet())
-        for widget in app.allWidgets():
-            widget.style().unpolish(widget)
-            widget.style().polish(widget)
-            widget.update()
-        QMessageBox.information(self, "Başarılı", "Renkler güncellendi!")
-
-    def reset_defaults(self):
-        defaults = theme_manager.reset_theme()
-        for key, btn in self.buttons.items():
-            if key in defaults:
-                theme_manager.current_theme[key] = defaults[key]
-                self.update_btn_style(btn, defaults[key])
-        self.apply_changes()
-# =====================================================
-# AYARLAR
-# =====================================================
-
 
 # =====================================================
 # LOGGING
@@ -364,146 +62,7 @@ logging.info("VoidPOS başlatıldı - GERÇEK POS MODU")
 # =====================================================
 # INGENICO MOVE 5000F - POS ENTEGRASYONU
 # =====================================================
-# =====================================================
-# ÇOKLU POS DESTEĞİ (BEKO + INGENICO)
-# =====================================================
 
-class POSType(Enum):
-    INGENICO_GOSB = "ingenico_gosb"
-    BEKO_ECR = "beko_ecr"
-    AUTO_DETECT = "auto"
-
-class UniversalPOSManager:
-    """Hem Beko hem Ingenico için çalışan akıllı POS yöneticisi"""
-    
-    def __init__(self):
-        self.logger = logging.getLogger("UniversalPOS")
-        self.detected_type = None
-        
-        # Ayarlar dosyasından oku
-        self.config = self.load_config()
-    
-    def load_config(self):
-        """Config dosyasından POS ayarlarını oku"""
-        config_file = "pos_config.json"
-        
-        default_config = {
-            "primary_ip": "192.168.1.157",
-            "primary_port": 6420,
-            "backup_ip": "192.168.1.100",
-            "backup_port": 9100,
-            "pos_type": "auto",  # auto, ingenico_gosb, beko_ecr
-            "timeout": 60,
-            "auto_detect": True
-        }
-        
-        if os.path.exists(config_file):
-            try:
-                with open(config_file, 'r') as f:
-                    return {**default_config, **json.load(f)}
-            except:
-                pass
-        
-        # Config yoksa oluştur
-        with open(config_file, 'w') as f:
-            json.dump(default_config, f, indent=4)
-        
-        return default_config
-    
-    def detect_pos_type(self, ip: str, port: int) -> Optional[POSType]:
-        """POS tipini otomatik algıla"""
-        self.logger.info(f"POS tipi algılanıyor: {ip}:{port}")
-        
-        # 1. Ingenico GÖSB dene (Port 6420)
-        if port == 6420:
-            ingenico = IngenicoGOSB(ip, port)
-            if ingenico.test_connection():
-                self.logger.info("✅ Ingenico GÖSB algılandı")
-                return POSType.INGENICO_GOSB
-        
-        # 2. Beko ECR dene (Port 9100 veya RS232)
-        if port in [9100, 9600]:
-            beko = BekoECR(ip, port)
-            if beko.test_connection():
-                self.logger.info("✅ Beko ECR algılandı")
-                return POSType.BEKO_ECR
-        
-        self.logger.warning("❌ POS tipi algılanamadı")
-        return None
-    
-    def create_pos_client(self):
-        """Doğru POS client'ı oluştur"""
-        ip = self.config['primary_ip']
-        port = self.config['primary_port']
-        
-        # Manuel tip belirtilmişse
-        if self.config['pos_type'] != "auto":
-            if self.config['pos_type'] == "ingenico_gosb":
-                return IngenicoGOSB(ip, port)
-            elif self.config['pos_type'] == "beko_ecr":
-                return BekoECR(ip, port)
-        
-        # Otomatik algılama
-        if self.config['auto_detect']:
-            detected = self.detect_pos_type(ip, port)
-            self.detected_type = detected
-            
-            if detected == POSType.INGENICO_GOSB:
-                return IngenicoGOSB(ip, port)
-            elif detected == POSType.BEKO_ECR:
-                return BekoECR(ip, port)
-        
-        # Varsayılan olarak Ingenico dene
-        return IngenicoGOSB(ip, port)
-    
-    def process_payment(self, amount: float, payment_type: str = "CARD") -> dict:
-        """
-        Ödeme işlemi - Hem NAKİT hem KART için çalışır
-        
-        Args:
-            amount: Tutar (TL)
-            payment_type: "CARD" veya "CASH"
-        """
-        tx_id = str(uuid.uuid4())[:8]
-        self.logger.info(f"💳 ÖDEME | {payment_type} | {amount:.2f} TL | TX:{tx_id}")
-        
-        try:
-            pos_client = self.create_pos_client()
-            
-            if payment_type == "CASH":
-                # NAKİT işlemi - Fiş yazdır ama kart okutma
-                result = pos_client.print_receipt_only(amount)
-            else:
-                # KART işlemi - Tam işlem
-                result = pos_client.sale(amount)
-            
-            if result['success']:
-                return {
-                    'success': True,
-                    'method': payment_type,
-                    'amount': amount,
-                    'auth_code': result.get('auth_code', 'CASH'),
-                    'receipt_no': result.get('rrn', tx_id),
-                    'card_number': result.get('card_number', '****'),
-                    'tx_id': tx_id,
-                    'message': 'İşlem Başarılı'
-                }
-            else:
-                return {
-                    'success': False,
-                    'method': payment_type,
-                    'message': result.get('message', 'İşlem Başarısız'),
-                    'tx_id': tx_id
-                }
-                
-        except Exception as e:
-            self.logger.exception("Ödeme hatası")
-            return {
-                'success': False,
-                'message': f'Hata: {str(e)}',
-                'tx_id': tx_id
-            }
-        
 class TxState(Enum):
     INIT = "INIT"
     SENT = "SENT"
@@ -522,488 +81,371 @@ class GOSBMessageType(Enum):
     STATUS = 0x35
 
 
-class IngenicoGOSB:
-    """Ingenico Move 5000F - GÖSB Protokolü (Garanti, Akbank, vb.)"""
-    
+class IngenicoMove5000F:
+    """
+    Ingenico Move 5000F POS Terminal
+    GÖSB Protokolü ile TCP/IP Bağlantısı
+    """
     ACK = 0x06
     NAK = 0x15
     STX = 0x02
     ETX = 0x03
+    FS = 0x1C
     
-    def __init__(self, ip: str, port: int):
+    def __init__(self, ip: str = "192.168.1.157", port: int = 6420):
         self.ip = ip
         self.port = port
-        self.socket = None
-        self.logger = logging.getLogger("IngenicoGOSB")
-    
-    def test_connection(self) -> bool:
-        """Bağlantı testi"""
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(3)
-            s.connect((self.ip, self.port))
-            s.close()
-            return True
-        except:
-            return False
+        self.socket: Optional[socket.socket] = None
+        self.logger = logging.getLogger("IngenicoMove5000F")
+        
+        self.connection_timeout = 10
+        self.transaction_timeout = 120
+        
+        self.terminal_id = None
+        self.merchant_id = None
     
     def connect(self) -> bool:
+        """POS terminaline bağlan"""
         try:
+            self.logger.info(f"POS'a bağlanılıyor: {self.ip}:{self.port}")
+            
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.settimeout(10)
+            self.socket.settimeout(self.connection_timeout)
             self.socket.connect((self.ip, self.port))
-            self.logger.info(f"✅ Bağlantı başarılı: {self.ip}:{self.port}")
+            
+            self.logger.info("✅ POS bağlantısı başarılı")
+            self._get_terminal_info()
+            
             return True
+            
+        except socket.timeout:
+            self.logger.error("❌ Bağlantı zaman aşımı")
+            return False
+        except ConnectionRefusedError:
+            self.logger.error("❌ Bağlantı reddedildi")
+            return False
         except Exception as e:
             self.logger.error(f"❌ Bağlantı hatası: {e}")
             return False
     
     def disconnect(self):
+        """Bağlantıyı kapat"""
         if self.socket:
             try:
                 self.socket.close()
+                self.logger.info("POS bağlantısı kapatıldı")
             except:
                 pass
             finally:
                 self.socket = None
     
-    def _build_gosb_message(self, msg_type: int, fields: dict) -> bytes:
-        """GÖSB mesajı oluştur (ISO 8583 benzeri)"""
-        payload = bytes([msg_type])
+    def _get_terminal_info(self) -> bool:
+        """Terminal bilgilerini al"""
+        try:
+            message = self._build_message(GOSBMessageType.STATUS, {})
+            self._send_message(message)
+            response = self._receive_message(timeout=10)
+            
+            if response:
+                parsed = self._parse_response(response)
+                self.terminal_id = parsed.get('terminal_id')
+                self.merchant_id = parsed.get('merchant_id')
+                self.logger.info(f"Terminal ID: {self.terminal_id}")
+                return True
+            return False
+        except:
+            return False
+    
+    def _build_message(self, msg_type: GOSBMessageType, fields: dict) -> bytes:
+        """GÖSB mesajı oluştur"""
+        payload = bytes([msg_type.value])
         
         for field_id, value in fields.items():
-            field_data = str(value).encode('ascii')
-            field_len = len(field_data)
-            
-            # Field: ID(2) + Length(2) + Data
-            payload += struct.pack('!H', field_id)
-            payload += struct.pack('!H', field_len)  # ✅ 2 byte (düzeltildi)
-            payload += field_data
+            if value is not None:
+                field_data = str(value).encode('ascii')
+                field_length = len(field_data)
+                
+                payload += struct.pack('!H', field_id)
+                payload += struct.pack('!I', field_length)[1:]
+                payload += field_data
         
-        # Frame: STX + Length(2) + Payload + ETX + LRC
         length = len(payload)
+        
         frame = bytes([self.STX])
         frame += struct.pack('!H', length)
         frame += payload
         frame += bytes([self.ETX])
         
-        # LRC hesapla
         lrc = 0
-        for b in frame[1:]:
-            lrc ^= b
+        for byte in frame[1:]:
+            lrc ^= byte
+        
         frame += bytes([lrc])
         
         return frame
     
-    def _send_and_wait_ack(self, message: bytes) -> bool:
-        """Mesaj gönder ve ACK bekle"""
-        try:
-            self.logger.debug(f"📤 TX: {message.hex()}")
-            self.socket.sendall(message)
-            
-            # ACK bekle (1 saniye)
-            self.socket.settimeout(1)
-            ack = self.socket.recv(1)
-            
-            if ack and ack[0] == self.ACK:
-                self.logger.debug("✅ ACK alındı")
-                return True
-            else:
-                self.logger.error(f"❌ NAK alındı: {ack.hex() if ack else 'timeout'}")
-                return False
-        except Exception as e:
-            self.logger.error(f"Gönderim hatası: {e}")
-            return False
+    def _send_message(self, message: bytes):
+        """Mesaj gönder"""
+        if not self.socket:
+            raise Exception("POS bağlı değil")
+        
+        self.logger.debug(f"Gönderilen: {message.hex()}")
+        self.socket.sendall(message)
     
-    def _receive_and_send_ack(self, timeout: int = 60) -> Optional[bytes]:
-        """Yanıt al ve ACK gönder"""
+    def _receive_message(self, timeout: Optional[int] = None) -> Optional[bytes]:
+        """Mesaj al - DÜZELTİLMİŞ VE TAM VERSİYON"""
+        if not self.socket:
+            raise Exception("POS bağlı değil")
+        
+        old_timeout = self.socket.gettimeout()
+        
         try:
-            self.socket.settimeout(timeout)
+            if timeout:
+                self.socket.settimeout(timeout)
             
-            # Frame oku: STX + Len(2) + Payload + ETX + LRC
+            # 1. STX Oku
             stx = self.socket.recv(1)
             if not stx or stx[0] != self.STX:
                 return None
             
-            len_bytes = self.socket.recv(2)
-            if len(len_bytes) != 2:
+            # 2. Uzunluk Oku (2 byte)
+            length_bytes = self.socket.recv(2)
+            if len(length_bytes) != 2:
                 return None
             
-            payload_len = struct.unpack('!H', len_bytes)[0]
+            length = struct.unpack('!H', length_bytes)[0]
             
-            # Payload oku
-            payload = b''
-            while len(payload) < payload_len:
-                chunk = self.socket.recv(payload_len - len(payload))
-                if not chunk:
-                    return None
-                payload += chunk
+            # 3. Payload Oku
+            payload = self.socket.recv(length)
+            if len(payload) != length:
+                return None
             
+            # 4. ETX Oku
             etx = self.socket.recv(1)
-            lrc_received = self.socket.recv(1)
-            
             if not etx or etx[0] != self.ETX:
                 return None
             
-            # LRC doğrula
-            frame = stx + len_bytes + payload + etx
-            lrc_calc = 0
-            for b in frame[1:]:
-                lrc_calc ^= b
-            
-            if lrc_calc != lrc_received[0]:
-                self.logger.error("❌ LRC hatası")
-                self.socket.send(bytes([self.NAK]))
+            # 5. LRC Oku
+            lrc_received = self.socket.recv(1)
+            if not lrc_received:
                 return None
             
-            # ACK gönder
-            self.socket.send(bytes([self.ACK]))
-            self.logger.debug(f"📥 RX: {payload.hex()}")
+            # 6. Frame Oluştur ve LRC Doğrula
+            frame = stx + length_bytes + payload + etx
+            lrc_calculated = 0
+            for byte in frame[1:]:
+                lrc_calculated ^= byte
+            
+            if lrc_calculated != lrc_received[0]:
+                self.logger.error("LRC hatası!")
+                # Hata durumunda NAK gönder
+                self.socket.send(bytes([self.NAK])) 
+                return None
+            
+            # Başarılıysa ACK gönder
+            self.socket.send(bytes([self.ACK])) 
+            
+            self.logger.debug(f"Alınan: {frame.hex()}")
             
             return payload
             
         except socket.timeout:
-            self.logger.error("Timeout - Yanıt alınamadı")
+            self.logger.error("Yanıt zaman aşımı")
             return None
         except Exception as e:
-            self.logger.error(f"Alma hatası: {e}")
+            self.logger.error(f"Okuma hatası: {e}")
             return None
+        finally:
+            if timeout:
+                self.socket.settimeout(old_timeout)
     
     def _parse_response(self, payload: bytes) -> dict:
         """GÖSB yanıtını parse et"""
-        result = {'msg_type': payload[0]}
+        result = {
+            'raw': payload.hex(),
+            'message_type': payload[0]
+        }
+        
         offset = 1
         
         while offset < len(payload):
-            if offset + 4 > len(payload):
+            if offset + 5 > len(payload):
                 break
             
             field_id = struct.unpack('!H', payload[offset:offset+2])[0]
             offset += 2
             
-            field_len = struct.unpack('!H', payload[offset:offset+2])[0]
-            offset += 2
+            length_bytes = b'\x00' + payload[offset:offset+3]
+            field_length = struct.unpack('!I', length_bytes)[0]
+            offset += 3
             
-            if offset + field_len > len(payload):
+            if offset + field_length > len(payload):
                 break
             
-            field_data = payload[offset:offset+field_len].decode('ascii', errors='ignore')
-            offset += field_len
+            field_data = payload[offset:offset+field_length].decode('ascii', errors='ignore')
+            offset += field_length
             
-            # Field mapping
-            field_names = {
-                1: 'response_code',
-                2: 'auth_code',
-                3: 'terminal_id',
-                4: 'merchant_id',
-                5: 'card_number',
-                6: 'amount',
-                7: 'stan',
-                8: 'rrn',
-                39: 'response_text'
-            }
-            
-            if field_id in field_names:
-                result[field_names[field_id]] = field_data
+            if field_id == 1:
+                result['response_code'] = field_data
+            elif field_id == 2:
+                result['auth_code'] = field_data
+            elif field_id == 3:
+                result['terminal_id'] = field_data
+            elif field_id == 4:
+                result['merchant_id'] = field_data
+            elif field_id == 5:
+                result['card_number'] = field_data
+            elif field_id == 6:
+                result['amount'] = field_data
+            elif field_id == 7:
+                result['stan'] = field_data
+            elif field_id == 8:
+                result['rrn'] = field_data
         
         return result
     
     def sale(self, amount: float) -> dict:
-        """KART ile satış"""
-        if not self.connect():
-            return {'success': False, 'message': 'Bağlantı hatası'}
+        """Satış işlemi"""
+        tx_id = str(uuid.uuid4())[:8]
+        
+        self.logger.info(f"🔄 SATIŞ | TX:{tx_id} | {amount:.2f} TL")
+        
+        if not self.socket:
+            if not self.connect():
+                return {
+                    'success': False,
+                    'message': 'POS bağlantı hatası'
+                }
         
         try:
             amount_krs = int(amount * 100)
             
-            # SALE mesajı (0x31)
-            message = self._build_gosb_message(0x31, {
-                6: amount_krs,  # Tutar (kuruş)
-                12: datetime.datetime.now().strftime("%y%m%d%H%M%S")  # Zaman
-            })
+            message = self._build_message(
+                msg_type=GOSBMessageType.SALE,
+                fields={
+                    6: amount_krs,
+                    12: datetime.datetime.now().strftime("%Y%m%d%H%M%S"),
+                    99: tx_id
+                }
+            )
             
-            if not self._send_and_wait_ack(message):
-                return {'success': False, 'message': 'Mesaj gönderilemedi'}
+            self.logger.info("📤 Kart bekleniyor...")
+            self._send_message(message)
             
-            # Yanıt bekle (60 saniye - kart okutma süresi)
-            response = self._receive_and_send_ack(timeout=60)
+            response = self._receive_message(timeout=self.transaction_timeout)
             
             if not response:
-                return {'success': False, 'message': 'POS yanıt vermedi', 'timeout': True}
-            
-            parsed = self._parse_response(response)
-            rc = parsed.get('response_code', 'XX')
-            
-            if rc == '00':
-                return {
-                    'success': True,
-                    'response_code': rc,
-                    'auth_code': parsed.get('auth_code', ''),
-                    'rrn': parsed.get('rrn', ''),
-                    'card_number': self._mask_card(parsed.get('card_number', '')),
-                    'message': 'İşlem Onaylandı'
-                }
-            else:
+                self.logger.error("❌ POS yanıt vermedi!")
                 return {
                     'success': False,
-                    'response_code': rc,
-                    'message': self._get_error_message(rc)
+                    'message': 'POS yanıt vermedi',
+                    'timeout': True
+                }
+            
+            parsed = self._parse_response(response)
+            response_code = parsed.get('response_code', 'XX')
+            
+            if response_code == '00':
+                self.logger.info(f"✅ ONAYLANDI | Auth:{parsed.get('auth_code')}")
+                
+                return {
+                    'success': True,
+                    'response_code': response_code,
+                    'auth_code': parsed.get('auth_code', ''),
+                    'card_number': self._mask_card(parsed.get('card_number', '')),
+                    'amount': amount,
+                    'stan': parsed.get('stan', ''),
+                    'rrn': parsed.get('rrn', ''),
+                    'message': 'İşlem Onaylandı',
+                    'tx_id': tx_id
+                }
+            else:
+                msg = self._get_response_message(response_code)
+                self.logger.warning(f"❌ REDDEDİLDİ | {response_code} | {msg}")
+                
+                return {
+                    'success': False,
+                    'response_code': response_code,
+                    'message': msg,
+                    'tx_id': tx_id
                 }
         
-        finally:
-            self.disconnect()
+        except Exception as e:
+            self.logger.exception(f"Satış hatası")
+            return {
+                'success': False,
+                'message': f'Hata: {str(e)}'
+            }
     
-    def print_receipt_only(self, amount: float) -> dict:
-        """NAKİT işlem - Sadece fiş yazdır (kart okutma YOK)"""
-        # Ingenico'da nakit işlemi için "DISPLAY ONLY" mesajı gönderilir
-        # veya hiç mesaj gönderilmez, sadece yazıcı komutu verilir
-        
-        self.logger.info(f"💵 NAKİT işlem - Fiş yazdırılıyor: {amount:.2f} TL")
-        
-        # Bazı POS'larda nakit için özel komut var, yoksa sadece Success dön
-        return {
-            'success': True,
-            'message': 'Nakit işlem kaydedildi',
-            'rrn': datetime.datetime.now().strftime("%y%m%d%H%M%S")
-        }
-    
-    def _mask_card(self, card: str) -> str:
-        if not card or len(card) < 10:
+    def _mask_card(self, card_number: str) -> str:
+        """Kart maskele"""
+        if not card_number or len(card_number) < 10:
             return "****"
-        return f"{card[:6]}{'*' * (len(card) - 10)}{card[-4:]}"
+        return f"{card_number[:6]}{'*' * (len(card_number) - 10)}{card_number[-4:]}"
     
-    def _get_error_message(self, code: str) -> str:
-        errors = {
-            '00': 'Onaylandı',
-            '05': 'Reddedildi',
+    def _get_response_message(self, code: str) -> str:
+        """Response mesajı"""
+        messages = {
+            '00': 'İşlem Onaylandı',
+            '05': 'İşlem Reddedildi',
             '51': 'Yetersiz Bakiye',
-            '54': 'Kart Süresi Dolmuş',
+            '54': 'Kartın Süresi Dolmuş',
             '55': 'Hatalı PIN',
-            '91': 'Banka Yanıt Vermiyor'
+            '57': 'İşlem İzni Yok',
+            '91': 'Banka Yanıt Vermiyor',
+            '96': 'Sistem Hatası'
         }
-        return errors.get(code, f'Hata Kodu: {code}')
+        return messages.get(code, f'Kod: {code}')
 
 
 # =====================================================
 # POS SERVİSİ
 # =====================================================
-class BekoECR:
-    """Beko POS - ECR Protokolü (Seri Port veya TCP/IP)"""
-    
-    STX = 0x02
-    ETX = 0x03
-    ACK = 0x06
-    NAK = 0x15
-    
-    def __init__(self, ip: str, port: int):
-        self.ip = ip
-        self.port = port
-        self.socket = None
-        self.logger = logging.getLogger("BekoECR")
-    
-    def test_connection(self) -> bool:
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(3)
-            s.connect((self.ip, self.port))
-            s.close()
-            return True
-        except:
-            return False
-    
-    def connect(self) -> bool:
-        try:
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.settimeout(10)
-            self.socket.connect((self.ip, self.port))
-            self.logger.info(f"✅ Beko bağlantı başarılı: {self.ip}:{self.port}")
-            return True
-        except Exception as e:
-            self.logger.error(f"❌ Bağlantı hatası: {e}")
-            return False
-    
-    def disconnect(self):
-        if self.socket:
-            try:
-                self.socket.close()
-            except:
-                pass
-            finally:
-                self.socket = None
-    
-    def _build_ecr_message(self, command: str, data: str = "") -> bytes:
-        """
-        Beko ECR mesaj formatı:
-        STX + Command + FS + Data + ETX + LRC
-        """
-        FS = chr(0x1C)  # Field Separator
-        
-        message = command
-        if data:
-            message += FS + data
-        
-        frame = bytes([self.STX])
-        frame += message.encode('ascii')
-        frame += bytes([self.ETX])
-        
-        # LRC
-        lrc = 0
-        for b in frame[1:]:
-            lrc ^= b
-        frame += bytes([lrc])
-        
-        return frame
-    
-    def _send_and_wait_ack(self, message: bytes) -> bool:
-        try:
-            self.logger.debug(f"📤 TX: {message.hex()}")
-            self.socket.sendall(message)
-            
-            ack = self.socket.recv(1)
-            return ack and ack[0] == self.ACK
-        except:
-            return False
-    
-    def _receive_and_send_ack(self, timeout: int = 60) -> Optional[bytes]:
-        try:
-            self.socket.settimeout(timeout)
-            
-            # STX bekle
-            stx = self.socket.recv(1)
-            if not stx or stx[0] != self.STX:
-                return None
-            
-            # ETX'e kadar oku
-            data = b''
-            while True:
-                byte = self.socket.recv(1)
-                if not byte:
-                    return None
-                if byte[0] == self.ETX:
-                    break
-                data += byte
-            
-            lrc_received = self.socket.recv(1)
-            
-            # LRC doğrula
-            frame = stx + data + bytes([self.ETX])
-            lrc_calc = 0
-            for b in frame[1:]:
-                lrc_calc ^= b
-            
-            if lrc_calc != lrc_received[0]:
-                self.socket.send(bytes([self.NAK]))
-                return None
-            
-            self.socket.send(bytes([self.ACK]))
-            self.logger.debug(f"📥 RX: {data.hex()}")
-            
-            return data
-        except:
-            return None
-    
-    def sale(self, amount: float) -> dict:
-        """KART satış (Beko formatı)"""
-        if not self.connect():
-            return {'success': False, 'message': 'Bağlantı hatası'}
-        
-        try:
-            # Beko komut formatı: "SALE" + amount
-            amount_str = f"{amount:.2f}".replace('.', '')  # 10.50 -> 1050
-            
-            message = self._build_ecr_message("SALE", amount_str)
-            
-            if not self._send_and_wait_ack(message):
-                return {'success': False, 'message': 'Komut gönderilemedi'}
-            
-            response = self._receive_and_send_ack(timeout=60)
-            
-            if not response:
-                return {'success': False, 'message': 'Yanıt alınamadı', 'timeout': True}
-            
-            # Yanıt parse et (Beko formatı: "OK" veya "ERROR")
-            response_str = response.decode('ascii', errors='ignore')
-            
-            if "OK" in response_str or "00" in response_str:
-                # Başarılı - Auth code ve RRN çıkar
-                parts = response_str.split(chr(0x1C))
-                return {
-                    'success': True,
-                    'auth_code': parts[1] if len(parts) > 1 else '',
-                    'rrn': parts[2] if len(parts) > 2 else '',
-                    'card_number': '****',
-                    'message': 'İşlem Onaylandı'
-                }
-            else:
-                return {
-                    'success': False,
-                    'message': f'İşlem Reddedildi: {response_str}'
-                }
-        
-        finally:
-            self.disconnect()
-    
-    def print_receipt_only(self, amount: float) -> dict:
-        """NAKİT işlem - Fiş yazdır"""
-        self.logger.info(f"💵 NAKİT - Fiş yazdırılıyor: {amount:.2f} TL")
-        
-        # Beko'da nakit için "PRINT" komutu
-        if not self.connect():
-            return {'success': True, 'message': 'Offline mode'}
-        
-        try:
-            message = self._build_ecr_message("PRINT", f"{amount:.2f}")
-            self._send_and_wait_ack(message)
-            
-            return {
-                'success': True,
-                'message': 'Fiş yazdırıldı',
-                'rrn': datetime.datetime.now().strftime("%y%m%d%H%M%S")
-            }
-        finally:
-            self.disconnect()
 
 class POSService:
     def __init__(self):
-        # ❌ HATA: Burada client oluşturmayın (Thread çakışır)
-        # self.client = IngenicoMove5000F(POS_IP, POS_PORT)
+        self.client = IngenicoMove5000F(POS_IP, POS_PORT)
         self.logger = logging.getLogger("POSService")
     
     def process_sale(self, amount: float) -> dict:
-        """Satış işlemi - Thread-Safe"""
+        """Satış işlemi"""
         tx_id = str(uuid.uuid4())[:8]
+        state = TxState.INIT
+        
         self.logger.info(f"TX START | {tx_id} | {amount:.2f} TL")
         
         try:
-            # ✅ Her işlem için YENİ client oluştur (Thread güvenliği)
-            client = IngenicoGOSB(POS_IP, POS_PORT)
-            result = client.sale(amount)
+            state = TxState.SENT
+            result = self.client.sale(amount)
             
             if result['success']:
+                state = TxState.APPROVED
                 return {
                     'success': True,
                     'rc': result['response_code'],
                     'auth_code': result['auth_code'],
                     'receipt_no': result['rrn'],
-                    'state': 'APPROVED',
+                    'state': state.value,
                     'tx_id': tx_id,
                     'card_number': result.get('card_number', '')
                 }
             else:
                 if result.get('timeout'):
+                    state = TxState.TIMEOUT
                     return {
                         'success': False,
                         'msg': 'POS zaman aşımı',
-                        'state': 'TIMEOUT',
+                        'state': state.value,
                         'tx_id': tx_id,
                         'pending': True
                     }
                 else:
+                    state = TxState.DECLINED
                     return {
                         'success': False,
                         'rc': result.get('response_code', 'XX'),
                         'msg': result['message'],
-                        'state': 'DECLINED',
+                        'state': state.value,
                         'tx_id': tx_id
                     }
         
@@ -1018,146 +460,136 @@ class POSService:
 
 
 class PaymentWorker(QThread):
-    """Ödeme işlemini arka planda yapar"""
     finished = Signal(dict)
     
-    def __init__(self, amount: float, method: str):
+    def __init__(self, amount: float):
         super().__init__()
         self.amount = amount
-        self.method = method  # "CARD" veya "CASH"
+        self.service = POSService()
     
     def run(self):
-        try:
-            pos_manager = UniversalPOSManager()
-            result = pos_manager.process_payment(self.amount, self.method)
-            self.finished.emit(result)
-        except Exception as e:
-            self.finished.emit({
-                'success': False,
-                'message': f'Kritik hata: {str(e)}'
-            })
+        result = self.service.process_sale(self.amount)
+        self.finished.emit(result)
 
 
 #CSS
-# =====================================================
-# DİNAMİK STYLESHEET (TEMPLATE)
-# =====================================================
-STYLESHEET_TEMPLATE = """
-    /* --- GENEL AYARLAR --- */
-    QMainWindow {{ background-color: {bg_main}; }}
-    QDialog {{ background-color: {bg_main}; }}
-    QWidget {{ font-family: 'Segoe UI', sans-serif; color: {text_primary}; outline: none; }}
-
-    /* --- SCROLLBAR (Gizli ve Şık) --- */
-    QScrollArea {{ border: none; background: transparent; }}
-    QScrollBar:vertical {{ background: {bg_main}; width: 8px; margin: 0; }}
-    QScrollBar::handle:vertical {{ background: #444; min-height: 30px; border-radius: 4px; }}
-    QScrollBar::handle:vertical:hover {{ background: {accent}; }}
-    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
-
-    /* --- INPUT ALANLARI (Tam Yuvarlak) --- */
-    QLineEdit, QComboBox, QDoubleSpinBox {{ 
-        background-color: {bg_secondary}; 
-        color: {text_primary}; 
-        border: 1px solid {border}; 
-        padding: 10px 15px; 
+STYLESHEET = """
+    QMainWindow { background-color: #121212; }
+    QWidget { font-family: 'Segoe UI', sans-serif; color: #e0e0e0; outline: none; }
+    
+    /* SCROLLBAR */
+    QScrollBar:vertical { background: #252525; width: 8px; margin: 0; border-radius: 4px; }
+    QScrollBar::handle:vertical { background: #404040; min-height: 30px; border-radius: 4px; }
+    
+    /* TABLO (SEPET) - DAHA BÜYÜK VE MODERN */
+    QTableWidget { 
+        background-color: #1e1e1e; 
         border-radius: 12px; 
-        font-size: 14px;
-    }}
-    QLineEdit:focus, QComboBox:focus {{ 
-        border: 1px solid {accent}; 
-        background-color: {bg_panel};
-    }}
-
-    /* --- TABLO / SEPET --- */
-    QTableWidget {{ 
-        background-color: {bg_panel}; 
-        border-radius: 12px; 
-        border: 1px solid {border};
-        gridline-color: transparent; 
-    }}
-    QTableWidget::item {{ 
-        border-bottom: 1px solid {border}; 
-        padding: 12px; 
-    }}
-    QTableWidget::item:selected {{ 
-        background-color: {bg_secondary}; /* Seçili satır hafif açık */
-        color: white; 
-        border-left: 3px solid {accent}; /* Sol tarafa renkli şerit */
-        border-radius: 4px;
-    }}
-    QHeaderView::section {{ 
-        background-color: {bg_main}; 
+        border: none; 
+        color: #fff; 
+        gridline-color: #303030; 
+        font-size: 18px; /* Font büyütüldü */
+        padding: 5px; 
+    }
+    QTableWidget::item { 
+        padding: 15px; /* Satır aralığı açıldı */
+        border-bottom: 1px solid #303030; 
+    }
+    QTableWidget::item:selected { 
+        background-color: #0a84ff; 
+        color: #fff; 
+        border-radius: 8px;
+    }
+    QHeaderView::section { 
+        background-color: #1e1e1e; 
         color: #888; 
         border: none; 
-        border-bottom: 2px solid {border}; 
-        padding: 8px; 
+        border-bottom: 2px solid #404040; 
+        padding: 10px; 
         font-weight: bold; 
-        text-transform: uppercase;
-        font-size: 12px;
-    }}
+        font-size: 14px; 
+    }
+    
+    /* SPLITTER (AYIRAÇ) */
+    QSplitter::handle { 
+        background-color: #333; 
+        height: 4px; /* Tutamaç kalınlaştırıldı */
+        margin: 2px;
+    }
+    QSplitter::handle:hover { 
+        background-color: #0a84ff; 
+    }
 
-    /* --- BUTONLAR (Genel) --- */
-    QPushButton {{
-        border-radius: 12px;
+    /* KATEGORİ KUTULARI */
+    QPushButton.CatBoxBtn { 
+        background-color: #252525; color: #e0e0e0; border: 1px solid #333; 
+        border-radius: 12px; font-size: 16px; font-weight: bold; margin: 4px; 
+        min-height: 70px; 
+    }
+    QPushButton.CatBoxBtn:hover { background-color: #333; border: 1px solid #555; }
+    QPushButton.CatBoxBtn:pressed { background-color: #0a84ff; color: white; border: 1px solid #0a84ff; }
+
+    /* CİRO KUTUSU (TIKLANABİLİR) */
+    QLabel#CiroBox {
+        background-color: #252525; color: #30d158; border: 1px solid #333;
+        border-radius: 16px; font-weight: bold; font-size: 18px; padding: 8px 15px;
+    }
+    QLabel#CiroBox:hover { 
+        border: 1px solid #30d158; cursor: pointer;
+    }
+
+    /* ÜST BAR BUTONLARI */
+    QPushButton.TopBarBtn { background-color: #252525; color: #e0e0e0; border: 1px solid #333; border-radius: 16px; font-weight: bold; font-size: 13px; padding: 0 15px; height: 45px; }    
+    /* BAŞLIKLAR */
+    QLabel#SectionTitle { color: #808080; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; margin: 5px; }
+    
+    /* NUMPAD */
+    QWidget#NumpadContainer { background-color: #252525; border-radius: 12px; border: 1px solid #333; }
+    QPushButton.NumBtn { background-color: transparent; color: white; font-size: 26px; font-weight: 400; border: 0.5px solid #333; border-radius: 0px; height: 65px; }
+    QPushButton.NumBtn:hover { background-color: #353535; }
+    QPushButton.NumBtn:pressed { background-color: #0a84ff; color: white; }
+    
+    /* ÖDEME BUTONLARI */
+    QPushButton.PayBtn { border-radius: 12px; font-size: 22px; font-weight: 800; color: white; }
+
+    /* SAĞ PANEL - PARA ÜSTÜ LİSTESİ */
+    QLabel.ChangeDenom {
+        color: #aaaaaa;
+        font-size: 16px;
         font-weight: bold;
-        border: 1px solid {border};
-        padding: 5px;
-    }}
-
-    /* --- KARTLAR VE KUTULAR (Apple Tarzı Gradient) --- */
-    /* Ürün Kartları, Kategori Kutuları vb. için genel QFrame */
-    QFrame {{
-        background-color: {bg_panel}; 
-        border-radius: 16px; 
-        border: 1px solid {border};
-    }}
-    
-    /* Özel Kategori Butonları */
-    QPushButton.CatBoxBtn {{ 
-        background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {bg_panel}, stop:1 {bg_main});
-        color: {text_primary}; 
-        border: 1px solid {border}; 
-        border-radius: 14px; 
-        font-size: 15px; 
-    }}
-    QPushButton.CatBoxBtn:hover {{
-        border: 1px solid {accent};
-        background-color: {bg_secondary};
-    }}
-    QPushButton.CatBoxBtn:pressed {{
-        background-color: {accent};
-        color: white;
-    }}
-
-    /* --- SAĞ PANEL (Para Üstü) --- */
-    QFrame#ChangeFrame {{ background-color: {bg_main}; border: 1px solid {border}; border-radius: 12px; }}
-    QLabel.ChangeResult {{ color: {success}; font-weight: 900; font-size: 26px; font-family: monospace; }}
-    
-    /* --- ÖZEL BUTONLAR --- */
-    QPushButton.PayBtn {{ border-radius: 14px; font-size: 22px; font-weight: 800; border: none; }}
-    QPushButton.NumBtn {{ background-color: {bg_panel}; font-size: 24px; border-radius: 0px; border: 1px solid {border}; }}
-    QPushButton.NumBtn:hover {{ background-color: {bg_secondary}; }}
-    QPushButton.NumBtn:pressed {{ background-color: {accent}; color: white; }}
-    
-    /* Yönetim Butonları */
-    QPushButton.TopBarBtn {{ background-color: {bg_panel}; color: {text_primary}; border-radius: 15px; }}
-    QPushButton.TopBarBtn:hover {{ border: 1px solid {accent}; }}
+        font-family: 'Consolas', 'Courier New', monospace;
+    }
+    QLabel.ChangeArrow {
+        color: #555555;
+        font-size: 16px;
+        font-weight: bold;
+    }
+    QLabel.ChangeResult {
+        color: #30d158; /* Yeşil Sonuç */
+        font-size: 22px;
+        font-weight: 900;
+        font-family: 'Consolas', 'Courier New', monospace;
+    }
+    QLabel.ChangeResultError {
+        color: #444; /* Sönük */
+        font-size: 16px;
+        font-style: italic;
+        font-family: 'Consolas', 'Courier New', monospace;
+    }
+    QFrame#ChangeFrame {
+        background-color: #202020;
+        border-radius: 12px;
+        border: 1px solid #333;
+    }
 """
 
 # --- VERİTABANI ---
 class DatabaseManager:
     def __init__(self, db_name="voidpos.db"):
-        self.db_path = os.path.join(get_app_path(), db_name)
-        self.db_name = db_name
-        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)      
-        self.cursor = self.conn.cursor()       
+        self.conn = sqlite3.connect(db_name, check_same_thread=False)
+        self.cursor = self.conn.cursor()
         self.create_tables()
-        
-        # Varsayılan Kategoriler
-        self.cursor.execute("INSERT OR IGNORE INTO categories (name, sort_order) VALUES ('Sigara', 0)")
-        self.cursor.execute("INSERT OR IGNORE INTO categories (name, sort_order) VALUES ('Viski', 1)")
-        self.conn.commit()
+        self.db_name = db_name
 
     def create_tables(self):
         self.cursor.execute("""
@@ -1242,89 +674,33 @@ class DatabaseManager:
         except Exception as e:
             return False, str(e)
 
-    # DatabaseManager sınıfının içine yapıştır:
-
     def import_products_from_csv(self, filename):
-        """CSV dosyasından ürünleri ve kategorileri veritabanına aktarır"""
-        if not os.path.exists(filename):
-            return False, f"❌ DOSYA BULUNAMADI: {filename}"
-            
+        """CSV dosyasından ürünleri günceller"""
         try:
             with open(filename, 'r', newline='', encoding='utf-8-sig') as f:
                 reader = csv.DictReader(f)
-                
-                # Başlıkları küçük harfe çevirip temizleyelim
-                if reader.fieldnames:
-                    reader.fieldnames = [name.strip().lower() for name in reader.fieldnames]
-                
-                added = 0
-                updated = 0
-                
-                # Kategori listesi (Tekrarları önlemek için set kullanıyoruz)
-                found_categories = set() 
-                
+                count = 0
                 for row in reader:
-                    # --- Veri Okuma ---
-                    name = row.get('name') or row.get('stokad') or row.get('urun_adi')
-                    if not name: continue 
-
-                    price = row.get('fiyat') or row.get('satis_fiyati') or row.get('gfiyat') or 0
-                    stock = row.get('kalana') or row.get('kalanb') or row.get('stok') or 0
-                    barcode = row.get('barkod') or row.get('barkod1')
+                    pid = row.get('id')
+                    if not pid: continue
                     
-                    # Kategori Okuma (Boşsa 'Genel' yap, boşlukları temizle)
-                    raw_cat = row.get('gurup') or row.get('kategori')
-                    category = raw_cat.strip() if raw_cat else 'Genel'
-                    
-                    # Kategoriyi hafızaya at (Daha sonra ekleyeceğiz)
-                    found_categories.add(category)
-
-                    cost = row.get('maliyet') or 0
-                    image = row.get('resim') or ''
-
-                    # --- Sayısal Dönüşümler ---
-                    try: price = float(str(price).replace(',', '.'))
-                    except: price = 0.0
-                    try: stock = int(float(str(stock).replace(',', '.')))
-                    except: stock = 0
-                    try: cost = float(str(cost).replace(',', '.'))
-                    except: cost = 0.0
-
-                    # --- Ürün Kayıt/Güncelleme ---
-                    exists = None
-                    if barcode:
-                        exists = self.cursor.execute("SELECT id FROM products WHERE barcode=?", (barcode,)).fetchone()
-                    if not exists:
-                        exists = self.cursor.execute("SELECT id FROM products WHERE name=?", (name,)).fetchone()
-
-                    if exists:
-                        self.cursor.execute("""
-                            UPDATE products SET sell_price=?, stock=?, cost_price=?, category=?, barcode=?, image_path=?
-                            WHERE id=?
-                        """, (price, stock, cost, category, barcode, image, exists[0]))
-                        updated += 1
-                    else:
-                        self.cursor.execute("""
-                            INSERT INTO products (name, sell_price, stock, cost_price, category, barcode, image_path, sort_order)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-                        """, (name, price, stock, cost, category, barcode, image))
-                        added += 1
-
-                # --- KRİTİK NOKTA: KATEGORİLERİ KAYDETME ---
-                # Toplanan kategorileri veritabanına ekle (Varsa atla - INSERT OR IGNORE)
-                for cat_name in found_categories:
-                    if cat_name: # Boş değilse
-                        # Kategoriyi ekle (sort_order 99 yaparak sona atıyoruz)
-                        self.cursor.execute("""
-                            INSERT OR IGNORE INTO categories (name, sort_order) 
-                            VALUES (?, 99)
-                        """, (cat_name,))
-
+                    # Veritabanını güncelle
+                    self.cursor.execute("""
+                        UPDATE products SET 
+                        name=?, cost_price=?, sell_price=?, stock=?, 
+                        critical_stock=?, category=?, barcode=?, image_path=?
+                        WHERE id=?
+                    """, (
+                        row['name'], row['cost_price'], row['sell_price'], row['stock'],
+                        row['critical_stock'], row['category'], row['barcode'], row['image_path'],
+                        pid
+                    ))
+                    count += 1
+                
             self.conn.commit()
-            return True, f"✅ İşlem Tamamlandı:\n• {added} Yeni Ürün\n• {updated} Güncelleme\n• {len(found_categories)} Kategori Kontrol Edildi."
-            
+            return True, f"{count} ürün güncellendi."
         except Exception as e:
-            return False, f"Hata Oluştu: {str(e)}"
+            return False, str(e)
         
     def get_all_categories(self):
         self.cursor.execute("SELECT name FROM categories ORDER BY sort_order ASC")
@@ -1657,53 +1033,51 @@ class ProductCard(QFrame):
         
         # Kart Boyutlandırma
         if is_mini:
-            self.setFixedSize(140, 160) # İdeal boyut
+            self.setFixedSize(95, 120)
             icon_size = 60
             font_sz = 13
-            font_p_sz = 16
+            font_p_sz = 14
         else:
             self.setFixedSize(165, 195)
-            icon_size = 70
-            font_sz = 14
+            icon_size = 60
+            font_sz = 12
             font_p_sz = 20
         
         self.setCursor(Qt.PointingHandCursor)
-        self.setObjectName("ProductCard") # CSS'teki stilin uygulanması için şart
+        self.setStyleSheet(f"""
+            QFrame {{ background-color: #252525; border-radius: 20px; border: 1px solid {'#ff453a' if stock <= 5 else '#353535'}; }}
+            QFrame:hover {{ background-color: #303030; border: 1px solid #0a84ff; }}
+        """)
         
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(5)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(2)
         
-        # --- 1. Menü Butonu (Sağ Üst Köşe - Absolute Positioning) ---
-        # Layout içine koymuyoruz, doğrudan sağ üste sabitliyoruz.
-        self.btn_menu = QPushButton("⋮", self)
-        self.btn_menu.setGeometry(self.width() - 30, 5, 25, 25) # Sağ üst köşe
-        self.btn_menu.setStyleSheet("""
-            QPushButton { background: transparent; color: #888; font-weight: 900; font-size: 18px; border: none; }
-            QPushButton:hover { color: white; background: rgba(255,255,255,0.1); border-radius: 12px; }
-        """)
+        # --- Üst Bar (Menü Butonu) ---
+        top_bar = QHBoxLayout()
+        top_bar.setContentsMargins(0, 0, 0, 0)
+        top_bar.addStretch()
+        
+        self.btn_menu = QPushButton("⋮")
+        self.btn_menu.setFixedSize(20, 20)
+        self.btn_menu.setStyleSheet("background:transparent; color:#888; font-weight:bold; border:none;")
         self.btn_menu.setCursor(Qt.PointingHandCursor)
         self.btn_menu.clicked.connect(self.show_options_menu)
-        self.btn_menu.show() # Butonu görünür yap
+        top_bar.addWidget(self.btn_menu)
         
-        # --- 2. Yıldız İkonu (Favori ise görünür) ---
-        if self.fav:
-            self.lbl_star = QLabel("⭐", self)
-            self.lbl_star.setGeometry(5, 5, 20, 20) # Sol üst köşe
-            self.lbl_star.setStyleSheet("background: transparent; border: none; font-size: 14px;")
-            self.lbl_star.show()
-
-        # --- 3. İkon (Ortada) ---
+        layout.addLayout(top_bar)
+        
+        # --- İkon ---
         icon_cont = QWidget()
         ic_lay = QVBoxLayout(icon_cont)
-        ic_lay.setContentsMargins(0, 10, 0, 0) # Üstten biraz boşluk (Menü ile çakışmasın)
+        ic_lay.setContentsMargins(0, 0, 0, 0)
         
         # Resim yoksa baş harfi göster
         icon = QLabel(name[0].upper() if name else "?")
         icon.setAlignment(Qt.AlignCenter)
         icon.setFixedSize(icon_size, icon_size)
         icon.setFont(QFont("Segoe UI", icon_size // 2.5, QFont.Bold))
-        icon.setStyleSheet(f"background:#333; color:#0a84ff; border-radius:{icon_size // 2}px;")
+        icon.setStyleSheet(f"background:#303030; color:#0a84ff; border-radius:{icon_size // 2}px;")
         
         if img_path and os.path.exists(img_path):
             icon.setPixmap(QPixmap(img_path).scaled(icon_size, icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
@@ -1711,7 +1085,7 @@ class ProductCard(QFrame):
         ic_lay.addWidget(icon, 0, Qt.AlignCenter)
         layout.addWidget(icon_cont)
         
-        # --- 4. İsim ve Fiyat ---
+        # --- İsim ve Fiyat ---
         name_lbl = QLabel(name)
         name_lbl.setWordWrap(True)
         name_lbl.setAlignment(Qt.AlignCenter)
@@ -1731,21 +1105,24 @@ class ProductCard(QFrame):
         
         layout.addStretch()
 
+    # --- Tıklama Olayı (Tek ve Düzgün Hali) ---
     def mousePressEvent(self, e):
-        # Menüye basınca kart tıklamasını iptal et
-        child = self.childAt(e.position().toPoint())
-        if hasattr(self, 'btn_menu') and child == self.btn_menu:
+        # Eğer tıklanan yer menü butonu ise kartın click eventini çalıştırma
+        child = self.childAt(e.pos())
+        if child == self.btn_menu:
             return
+            
         if e.button() == Qt.LeftButton:
+            # Buradaki callback'in parametreleri __init__ içinde gelen yapıya uygun olmalı
             self.cb(self.name_val, self.price_val)
-
+    
+    # --- Sağ Tık / Menü Butonu Menüsü ---
     def show_options_menu(self):
         menu = QMenu(self)
         menu.setStyleSheet("QMenu { background-color: #252525; color: white; border: 1px solid #444; } QMenu::item:selected { background-color: #0a84ff; }")
         
-        # Favori Ekle / Çıkar
-        fav_text = "⭐ Hızlı Erişimden Kaldır" if self.fav else "⭐ Hızlı Erişime Ekle"
-        act_fav = menu.addAction(fav_text)
+        # Hızlı Erişim
+        act_fav = menu.addAction("⭐ Hızlı Erişimden Kaldır" if self.fav else "⭐ Hızlı Erişime Ekle")
         act_fav.triggered.connect(self.toggle_fav)
         
         menu.addSeparator()
@@ -1754,7 +1131,7 @@ class ProductCard(QFrame):
         act_price = menu.addAction("💰 Fiyat Değiştir")
         act_price.triggered.connect(self.change_price)
         
-        # İsim Değiştir
+        # İsim Değiştir (Yarım kalan fonksiyon düzeltildi)
         act_name = menu.addAction("✏️ İsim Değiştir")
         act_name.triggered.connect(self.change_name)
 
@@ -1762,45 +1139,82 @@ class ProductCard(QFrame):
         act_stock = menu.addAction("📦 Stok Sayım/Düzenle")
         act_stock.triggered.connect(self.change_stock)
         
+        # Kritik Stok
+        act_crit = menu.addAction("⚠️ Kritik Stok Limiti")
+        act_crit.triggered.connect(self.change_critical_stock)
+        
+        # Maliyet
+        act_cost = menu.addAction("📉 Maliyet Değiştir")
+        act_cost.triggered.connect(self.change_cost)
+        
         menu.addSeparator()
         
         # Kategori Taşıma
         cat_menu = menu.addMenu("📂 Kategoriye Taşı")
         cat_menu.setStyleSheet("QMenu { background-color: #252525; color: white; border: 1px solid #444; }")
         
-        categories = self.db.get_all_categories()
+        # DB'den kategorileri çekiyoruz
+        categories = self.db.get_all_categories() if hasattr(self.db, 'get_all_categories') else []
         for cat in categories:
             if cat == "Tüm Ürünler": continue
             cat_menu.addAction(cat, lambda c=cat: self.move_to_category(c))
             
         menu.exec(QCursor.pos())
 
-    # --- İşlevler ---
+    # --- İşlev Fonksiyonları ---
+
     def toggle_fav(self):
         self.db.toggle_favorite(self.pid, 0 if self.fav else 1)
-        if self.update_cb: self.update_cb()
+        self.update_cb()
 
     def change_price(self):
         val, ok = QInputDialog.getDouble(self, "Fiyat", "Yeni Satış Fiyatı:", self.price_val, 0, 100000, 2)
         if ok:
             self.db.update_product_field(self.pid, "sell_price", val)
-            if self.update_cb: self.update_cb()
+            self.update_cb()
             
     def change_name(self):
         text, ok = QInputDialog.getText(self, "İsim Değiştir", "Yeni Ürün Adı:", text=self.name_val)
         if ok and text:
             self.db.update_product_field(self.pid, "name", text)
-            if self.update_cb: self.update_cb()
+            self.update_cb()
 
     def change_stock(self):
         val, ok = QInputDialog.getInt(self, "Stok", "Yeni Stok Adedi:", self.stock_val, -1000, 100000, 1)
         if ok:
             self.db.update_product_field(self.pid, "stock", val)
-            if self.update_cb: self.update_cb()
+            self.update_cb()
+
+    def change_critical_stock(self):
+        # Mevcut kritik stoğu çekmeye çalış, yoksa varsayılan 5
+        # Not: DB yapınıza göre get_product_by_id dönüşü değişebilir.
+        curr = 5 
+        try:
+            prod_data = self.db.get_product_by_id(self.pid)
+            if prod_data and len(prod_data) > 5:
+                curr = prod_data[5] # 5. indexin kritik stok olduğunu varsayıyoruz
+        except:
+            pass
+            
+        val, ok = QInputDialog.getInt(self, "Kritik Stok", "Uyarı verilecek stok limiti:", curr, 0, 1000, 1)
+        if ok:
+            self.db.update_product_field(self.pid, "critical_stock", val)
+            self.update_cb()
+
+    def change_cost(self):
+        # get_cost fonksiyonu isme göre değil ID'ye göre çalışsa daha güvenli olur ama mevcut yapıyı korudum
+        current_cost = 0.0
+        if hasattr(self.db, 'get_cost'):
+             current_cost = self.db.get_cost(self.name_val)
+             
+        val, ok = QInputDialog.getDouble(self, "Maliyet", "Yeni Maliyet:", current_cost, 0, 100000, 2)
+        if ok:
+            self.db.update_product_field(self.pid, "cost_price", val)
+            self.update_cb()
 
     def move_to_category(self, cat_name):
         self.db.update_product_field(self.pid, "category", cat_name)
-        if self.update_cb: self.update_cb()
+        self.update_cb()
         QMessageBox.information(self, "Taşındı", f"Ürün '{cat_name}' kategorisine taşındı.")
 
 
@@ -1863,70 +1277,74 @@ class ClickableLabel(QLabel):
         super().mousePressEvent(event)
 
 class CategoryCard(QFrame):
-    def __init__(self, name, click_cb, is_add_button=False, db_manager=None, refresh_cb=None, is_all_products=False):
+    def __init__(self, name, click_cb, is_add_button=False, db_manager=None, refresh_cb=None):
         super().__init__()
+        self.setFixedSize(150, 100)
+        self.setCursor(Qt.PointingHandCursor)
         self.name = name
-        self.cb = click_cb
         self.db = db_manager
         self.refresh_cb = refresh_cb
-        self.is_add_button = is_add_button
-
-        self.setFixedSize(130, 90) 
-        self.setCursor(Qt.PointingHandCursor)
-
-        # --- STİL SEÇİMİ (CSS ID Ataması) ---
-        if is_all_products:
-            self.setObjectName("CategoryCard_All") # Mavi Gradyan
-            icon_bg = "rgba(255,255,255,0.2)"
-            text_color = "white"
-            icon_text = "♾️" 
-        elif is_add_button:
-            self.setObjectName("CategoryCard_Add") # Yeşil Kesikli
-            icon_bg = "rgba(48, 209, 88, 0.1)"
-            text_color = "#30d158"
+        self.cb = click_cb
+        
+        if is_add_button:
+            # Ekleme Butonu 
+            self.setStyleSheet("""
+                QFrame { background-color: rgba(48, 209, 88, 0.1); border-radius: 24px; border: 1px dashed #30d158; }
+                QFrame:hover { background-color: rgba(48, 209, 88, 0.2); }
+            """)
+            lbl_color = "#414e44"
             icon_text = "+"
+            font_size = "32px"
         else:
-            self.setObjectName("CategoryCard_Normal") # Standart Koyu
-            icon_bg = "#333333"
-            text_color = "#e0e0e0"
+            # Normal Kategori 
+            self.setStyleSheet("""
+                QFrame { background-color: #252525; border-radius: 24px; border: 1px solid #333; }
+                QFrame:hover { background-color: #303030; border: 1px solid #0a84ff; }
+            """)
+            lbl_color = "#45525e"
             icon_text = name[0].upper() if name else "?"
+            font_size = "24px"
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 15, 10, 15)
-        layout.setSpacing(5)
+        layout.setContentsMargins(5,5,5,5)
+        layout.setSpacing(2)
 
-        # 1. İKON (Yuvarlak)
-        icon_container = QLabel(icon_text)
-        icon_container.setFixedSize(40, 40)
-        icon_container.setAlignment(Qt.AlignCenter)
-        icon_container.setStyleSheet(f"""
-            background-color: {icon_bg}; 
-            color: {text_color}; 
-            border-radius: 20px; 
-            font-size: 18px; 
-            font-weight: bold;
-            border: none;
-        """)
-        layout.addWidget(icon_container, 0, Qt.AlignCenter)
-
-        # 2. METİN
-        lbl_name = QLabel(name)
-        lbl_name.setAlignment(Qt.AlignCenter)
-        lbl_name.setWordWrap(True)
-        lbl_name.setStyleSheet("background: transparent; border: none; font-weight: 600; font-size: 14px; color: " + text_color + ";")
-        layout.addWidget(lbl_name)
+        # --- Üst Bar (Menü Butonu) ---
+        top_bar = QHBoxLayout()
+        top_bar.addStretch()
         
-        # MENÜ BUTONU
-        if not is_add_button and not is_all_products:
-            self.btn_menu = QPushButton("⋮", self)
-            self.btn_menu.setGeometry(135, 5, 20, 20)
-            self.btn_menu.setStyleSheet("background: transparent; color: #666; font-weight: bold; border: none;")
+        # Sadece normal kategorilerde ve "Tüm Ürünler" değilse menü göster
+        if not is_add_button and name != "Tüm Ürünler":
+            self.btn_menu = QPushButton("⋮")
+            self.btn_menu.setFixedSize(20, 20)
+            self.btn_menu.setStyleSheet("background:transparent; color:#888; font-weight:bold; border:none;")
             self.btn_menu.setCursor(Qt.PointingHandCursor)
             self.btn_menu.clicked.connect(self.show_options)
-            self.btn_menu.show()
+            top_bar.addWidget(self.btn_menu)
+        
+        layout.addLayout(top_bar)
+
+        # --- İçerik (İkon + İsim) ---
+        content_lay = QVBoxLayout()
+        content_lay.setSpacing(5)
+        
+        icon_lbl = QLabel(icon_text)
+        icon_lbl.setStyleSheet(f"color: {lbl_color}; font-size: {font_size}; font-weight: bold; border:none; background:transparent;")
+        icon_lbl.setAlignment(Qt.AlignCenter)
+        
+        lbl = QLabel(name)
+        lbl.setAlignment(Qt.AlignCenter)
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet("color: white; font-size: 13px; font-weight: 600; border: none; background: transparent;")
+        
+        content_lay.addWidget(icon_lbl)
+        content_lay.addWidget(lbl)
+        layout.addLayout(content_lay)
+        layout.addStretch()
 
     def mousePressEvent(self, e):
-        child = self.childAt(e.position().toPoint())
+        # Menü butonuna basıldıysa kart tıklamasını engelle
+        child = self.childAt(e.pos())
         if hasattr(self, 'btn_menu') and child == self.btn_menu:
             return
         if e.button() == Qt.LeftButton:
@@ -1935,8 +1353,10 @@ class CategoryCard(QFrame):
     def show_options(self):
         menu = QMenu(self)
         menu.setStyleSheet("QMenu { background-color: #252525; color: white; border: 1px solid #444; } QMenu::item:selected { background-color: #0a84ff; }")
+        
         act_rename = menu.addAction("✏️ İsim Değiştir")
         act_rename.triggered.connect(self.rename_category)
+        
         menu.exec(QCursor.pos())
 
     def rename_category(self):
@@ -1945,11 +1365,15 @@ class CategoryCard(QFrame):
             if self.db.rename_category(self.name, new_name):
                 QMessageBox.information(self, "Başarılı", "Kategori güncellendi.")
                 if self.refresh_cb: self.refresh_cb()
+            else:
+                QMessageBox.warning(self, "Hata", "Bu isimde bir kategori zaten var!")
 
-
-# =================
-# AI SERVICE 
-# =================
+# =====================================================
+# YAPAY ZEKA SERVİSİ (AI SERVICE)
+# =====================================================
+# =====================================================
+# GELİŞTİRİLMİŞ YAPAY ZEKA SERVİSİ (AI SERVICE v2)
+# =====================================================
 class AIService:
     def __init__(self, db_path="voidpos.db"):
         self.db_path = db_path
@@ -2209,103 +1633,24 @@ class AIService:
         except:
             return None
 
-# Hatalı kısmı silip bunu yapıştır:
-class AIBackgroundWorker(QThread):
-    finished = Signal(list) 
-    error = Signal(str)
-
-    def __init__(self, db_manager):
-        super().__init__()
-        self.db = db_manager
-
-    def run(self):
-        try:
-            conn = sqlite3.connect(self.db.db_name)
-            cursor = conn.cursor()
-            
-            # --- PROFESYONEL SORGULAMA ---
-            # 1. Adım: Sadece son 30 günde satışı olan ürünleri ve ne kadar sattıklarını bul.
-            # Ürünler tablosuyla birleştirerek güncel stoğu da al.
-            query = """
-                SELECT p.id, p.name, p.stock, SUM(s.quantity) as toplam_satis
-                FROM sale_items s
-                JOIN products p ON s.product_name = p.name
-                WHERE s.sale_date >= date('now', '-30 days')
-                GROUP BY p.name
-            """
-            cursor.execute(query)
-            aktif_urunler = cursor.fetchall()
-            conn.close()
-
-            oneriler = []
-            analiz_suresi = 30 # Son 30 günü baz alıyoruz
-
-            for pid, name, stock, toplam_satis in aktif_urunler:
-                # 2. Adım: Satış Hızını Hesapla (Adet / Gün)
-                gunluk_ortalama = toplam_satis / analiz_suresi
-                
-                # Eğer ürün çok çok az satıyorsa (Ayda 1-2 tane) uyarı vermeye değmez
-                if gunluk_ortalama < 0.1: 
-                    continue
-
-                # 3. Adım: Kritik Eşik Belirle (Ürün bizi kaç gün idare eder?)
-                # Güvenlik stoğu: Ürünün bitmesine 3 günden az kaldıysa uyar.
-                kalan_gun_omru = stock / gunluk_ortalama if gunluk_ortalama > 0 else 0
-                
-                if kalan_gun_omru <= 3:
-                    # 4. Adım: Akıllı Sipariş Miktarı Hesapla
-                    # Bizi 14 gün (2 hafta) idare edecek kadar sipariş öner.
-                    hedef_stok = int(gunluk_ortalama * 14) 
-                    gereken_siparis = hedef_stok - stock
-                    
-                    # Sipariş miktarı çok küçükse (örn: 1 tane) yuvarla
-                    if gereken_siparis < 5: gereken_siparis = 10 
-
-                    # Mesajı Hazırla
-                    acil_durum = "ÇOK ACİL" if kalan_gun_omru < 1 else "Dikkat"
-                    
-                    oneriler.append({
-                        "tur": "STOK",
-                        "mesaj": f"📉 {acil_durum}: **{name}**\n"
-                                 f"• Günlük Satış Hızı: {gunluk_ortalama:.1f} adet\n"
-                                 f"• Kalan Stok: {stock} (Yeteceği gün: {kalan_gun_omru:.1f})\n"
-                                 f"• Öneri: **{gereken_siparis}** adet sipariş verin (2 haftalık stok).",
-                        "aksiyon_verisi": {"id": pid, "islem": "siparis_ver"}
-                    })
-            
-            self.finished.emit(oneriler)
-
-        except Exception as e:
-            self.error.emit(str(e))
-            
 class VoidAI_Engine:
-    def __init__(self, csv_adi="urunler.csv"):
-        base_path = get_app_path()
-        
-        self.klasor_yolu = os.path.join(base_path, "urunler_klasoru")
-        
-        if not os.path.exists(self.klasor_yolu):
-            os.makedirs(self.klasor_yolu)
-            
-        self.csv_yolu = os.path.join(self.klasor_yolu, csv_adi)
-        
-        self.db_path = os.path.join(base_path, "voidpos.db")
+    def __init__(self, csv_yolu="urunler_klasoru/urunler.csv"):
+        # Dosya yolunu kendine göre düzeltmeyi unutma!
+        self.csv_yolu = csv_yolu
 
     def verileri_cek(self):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        # Not: Tablo adlarının doğruluğundan emin ol (products vs urunler)
-        try:
-            cursor.execute("SELECT id, name, stock, critical_stock FROM products")
-            veriler = cursor.fetchall()
-        except:
-            veriler = []
+        # Ürünleri veritabanından çekiyoruz (sütun isimlerini kendi DB'ne göre ayarla)
+        cursor.execute("SELECT id, urun_adi, stok, kritik_seviye, skt FROM urunler")
+        veriler = cursor.fetchall()
         conn.close()
         
+        # AI'ın anlayacağı formata çeviriyoruz
         urun_listesi = []
         for v in veriler:
             urun_listesi.append({
-                "id": v[0], "ad": v[1], "stok": v[2], "kritik": v[3], "skt": "2030-01-01" # SKT yoksa varsayılan
+                "id": v[0], "ad": v[1], "stok": v[2], "kritik": v[3], "skt": v[4]
             })
         return urun_listesi
     
@@ -2315,84 +1660,91 @@ class VoidAI_Engine:
             return []
         
         veriler = []
-        with open(self.csv_yolu, mode='r', encoding='utf-8-sig') as file:
+        with open(self.csv_yolu, mode='r', encoding='utf-8') as file:
             reader = csv.DictReader(file)
             for row in reader:
                 veriler.append(row)
         return veriler
 
     def tum_analizleri_yap(self):
-        """
-        Kritik stoğun altındaki ürünleri kontrol eder.
-        ANCAK: Sadece son 30 gün içinde satışı olan (Aktif) ürünleri dikkate alır.
-        Böylece 'Ölü Stok' için gereksiz sipariş uyarısı vermez.
-        """
-        conn = sqlite3.connect(self.db_path)
-        
-        # SORGUYU GÜNCELLEDİK:
-        # products tablosu ile sale_items tablosunu birleştiriyoruz (JOIN).
-        # Sadece son 30 günde satışı olanları seçiyoruz.
-        query = """
-            SELECT DISTINCT p.id, p.name, p.stock, p.critical_stock, p.sell_price 
-            FROM products p
-            JOIN sale_items s ON p.name = s.product_name
-            WHERE p.stock <= p.critical_stock
-            AND s.sale_date >= date('now', '-30 days')
-        """
-        
-        try:
-            cursor = conn.execute(query)
-            kritik_aktif_urunler = cursor.fetchall()
-        except Exception as e:
-            print(f"AI Analiz Hatası: {e}")
-            kritik_aktif_urunler = []
-        finally:
-            conn.close()
-
+        """Hem stok hem SKT analizini tek seferde yapar."""
+        urunler = self.verileri_oku()
         oneriler = []
-        for pid, ad, stok, kritik, fiyat in kritik_aktif_urunler:
-            # Kritik stok boş gelebilir, varsayılan 5 yapalım
-            kritik_limiti = kritik if kritik is not None else 5
-            
-            eksik = (kritik_limiti * 2) - stok
-            if eksik < 1: eksik = 5 # En az 5 tane sipariş verdir
-            
-            oneriler.append({
-                "tur": "SIPARIS",
-                "mesaj": f"📦 STOK ALARMI (Aktif Ürün): {ad}\nStok: {stok} (Kritik: {kritik_limiti}).\nBu ürün satılıyor, acil {eksik} adet sipariş geçilmeli.",
-                "aksiyon_verisi": {"id": pid, "islem": "mail_at", "miktar": eksik, "yeni_fiyat": fiyat}
-            })
-        
+        bugun = datetime.date.today()
+
+        if not urunler:
+            return [{"mesaj": "HATA: CSV dosyası boş veya bulunamadı!"}]
+
+        for urun in urunler:
+            # Veri Tipi Dönüşümleri (CSV hep string okur, sayıya çevirmeliyiz)
+            try:
+                u_id = urun['id']
+                ad = urun['urun_adi']
+                stok = int(urun['stok'])
+                fiyat = float(urun['fiyat'])
+                hiz = urun['satis_hizi'] # "YUKSEK", "NORMAL" vs.
+                
+                # Tarih Dönüşümü (YYYY-AA-GG formatında olmalı)
+                skt_obj = datetime.datetime.strptime(urun['skt'], "%Y-%m-%d").date()
+                kalan_gun = (skt_obj - bugun).days
+            except ValueError:
+                continue # Hatalı satırı atla
+
+            # --- KURAL 1: KRİTİK STOK ANALİZİ ---
+            # Stok 20'den azsa VE Satış Hızı Yüksekse
+            if stok < 20 and hiz == "YUKSEK":
+                eksik = 50 - stok # 50'ye tamamla
+                oneriler.append({
+                    "tur": "SIPARIS",
+                    "mesaj": f"📦 STOK ALARMI: {ad} çok hızlı satıyor ama elde {stok} kaldı. {eksik} adet sipariş geçilmeli.",
+                    "aksiyon_verisi": {"id": u_id, "islem": "mail_at", "miktar": eksik}
+                })
+
+            # --- KURAL 2: SKT (SON KULLANMA) ANALİZİ ---
+            if 0 < kalan_gun <= 3:
+                yeni_fiyat = fiyat * 0.90 # %10 İndirim
+                oneriler.append({
+                    "tur": "INDIRIM",
+                    "mesaj": f"📉 SKT UYARISI: {ad} bozulmak üzere ({kalan_gun} gün kaldı). Fiyatı {fiyat} -> {yeni_fiyat:.2f} TL yapalım mı?",
+                    "aksiyon_verisi": {"id": u_id, "islem": "fiyat_dusur", "yeni_fiyat": yeni_fiyat}
+                })
+
         return oneriler
 
     def aksiyonu_uygula(self, aksiyon_verisi):
+        """
+        Kullanıcı 'Onayla' dediğinde CSV'yi günceller veya Mail atar.
+        """
         if aksiyon_verisi["islem"] == "mail_at":
+            # Mail simülasyonu
             return f"Tedarikçiye {aksiyon_verisi['miktar']} adetlik sipariş maili gönderildi. ✅"
+
         elif aksiyon_verisi["islem"] == "fiyat_dusur":
-            return f"Fiyat güncellendi. ✅"
+            # --- CSV GÜNCELLEME (EN ÖNEMLİ KISIM) ---
+            tum_urunler = self.verileri_oku()
+            
+            # Listeyi gez, ilgili ürünü bul ve fiyatını değiştir
+            for urun in tum_urunler:
+                if urun['id'] == aksiyon_verisi['id']:
+                    urun['fiyat'] = str(aksiyon_verisi['yeni_fiyat']) # Yeni fiyatı yaz
+                    break
+            
+            # Dosyayı baştan yaz (Güncelleme işlemi)
+            basliklar = ["id", "urun_adi", "stok", "fiyat", "satis_hizi", "skt"]
+            with open(self.csv_yolu, mode='w', encoding='utf-8', newline='') as file:
+                writer = csv.DictWriter(file, fieldnames=basliklar)
+                writer.writeheader()
+                writer.writerows(tum_urunler)
+            
+            return f"Fiyat güncellendi ve etiket basıldı. ✅"
+
         return "İşlem başarısız."
 
 # --- ANA UYGULAMA ---
 class NexusPOS(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.denominations = [200, 100, 50, 20, 10, 5, 1, 0.50, 0.25]
         self.db = DatabaseManager()
-        self.cart_data = []
-        try:
-            urun_sayisi = self.db.cursor.execute("SELECT Count(*) FROM products").fetchone()[0]
-            if urun_sayisi == 0:
-                print("Veritabanı boş. CSV aranıyor...")
-                csv_yolu = os.path.join(get_app_path(), "urunler_temiz.csv")
-                
-                if os.path.exists(csv_yolu):
-                    basari, mesaj = self.db.import_products_from_csv(csv_yolu)
-                    print(f"Otomatik Yükleme Sonucu: {mesaj}")
-                else:
-                    print(f"UYARI: {csv_yolu} dosyası bulunamadı!")
-        except Exception as e:
-            print(f"Otomatik yükleme hatası: {e}")
-            
         self.selected_row = -1
         self.barcode_buffer = ""
         self.ciro_visible = True # Ciro görünürlük durumu
@@ -2400,12 +1752,11 @@ class NexusPOS(QMainWindow):
         self.init_ui()
         self.setWindowTitle("VoidPOS")
         self.resize(1600, 900)
+        self.setStyleSheet(STYLESHEET)
         self.ai = AIService("voidpos.db")
-        base_path = get_app_path()
-        klasor_yolu = os.path.join(base_path, "urunler_klasoru")
-        csv_path = os.path.join(get_app_path(), "urunler_temiz.csv")
-        if not os.path.exists(klasor_yolu):
-            os.makedirs(klasor_yolu)
+        # Klasör yoksa oluştur
+        if not os.path.exists("urunler_klasoru"):
+            os.makedirs("urunler_klasoru")
         self.db.export_products_to_csv("urunler_klasoru/urunler.csv")
         self.ai_timer = QTimer(self)
         self.ai_timer.timeout.connect(self.ai_otomatik_kontrol)
@@ -2421,7 +1772,7 @@ class NexusPOS(QMainWindow):
         # --- 1. SOL PANEL (AYNI) ---
         left_container = QFrame()
         left_container.setFixedWidth(520)
-        left_container.setObjectName("LeftPanel")
+        left_container.setStyleSheet("background:#181818; border-right:1px solid #252525;")
         left_layout = QVBoxLayout(left_container)
         
         # Arama
@@ -2430,6 +1781,7 @@ class NexusPOS(QMainWindow):
         self.search_bar = QLineEdit()
         self.search_bar.setPlaceholderText("🔍 Ürün Ara...")
         self.search_bar.setFixedHeight(40)
+        self.search_bar.setStyleSheet("background:#252525; color:white; border:1px solid #333; border-radius:20px; padding-left:15px;")
         self.search_bar.textChanged.connect(self.on_search_changed)
         search_lay.addWidget(self.search_bar)
         left_layout.addWidget(search_cont)
@@ -2448,7 +1800,7 @@ class NexusPOS(QMainWindow):
         # --- 2. ORTA PANEL (MODERN SEPET) ---
         center_container = QFrame()
         # border-right ile sağ paneli ayırıyoruz ama kendi etrafında kutu yok
-        center_container.setObjectName("CenterPanel")        
+        center_container.setStyleSheet("background:#1a1a1a; border-right:1px solid #333;")
         center_layout = QVBoxLayout(center_container)
         center_layout.setContentsMargins(10, 20, 10, 10) # Üstten biraz boşluk
         
@@ -2504,7 +1856,7 @@ class NexusPOS(QMainWindow):
         # --- 3. SAĞ PANEL (AYNI) ---
         right_container = QFrame()
         right_container.setFixedWidth(400)
-        right_container.setObjectName("RightPanel")
+        right_container.setStyleSheet("background:#161616;")
         right_layout = QVBoxLayout(right_container)
         
         self.change_panel = self.create_change_list_panel()
@@ -2513,22 +1865,15 @@ class NexusPOS(QMainWindow):
         self.numpad = MergedNumpad(self.numpad_action)
         right_layout.addWidget(self.numpad, stretch=0)
         
-
         pay_lay = QHBoxLayout()
-        pay_lay.setSpacing(15) # Butonlar arası boşluk
-        
-        # NAKİT BUTONU
         btn_cash = QPushButton("NAKİT")
-        btn_cash.setObjectName("BtnCash")  # <--- CSS'teki #BtnCash buna bağlanır
-        btn_cash.setFixedHeight(90)        # <--- Yükseklik veriyoruz ki kaybolmasın
-        btn_cash.setCursor(Qt.PointingHandCursor)
+        btn_cash.setProperty("class", "PayBtn")
+        btn_cash.setStyleSheet("background-color:#30d158; color:black; height: 80px;")
         btn_cash.clicked.connect(lambda: self.finish_sale("Nakit"))
         
-        # KART BUTONU
         btn_card = QPushButton("KART")
-        btn_card.setObjectName("BtnCard")  # <--- CSS'teki #BtnCard buna bağlanır
-        btn_card.setFixedHeight(90)        # <--- Yükseklik veriyoruz
-        btn_card.setCursor(Qt.PointingHandCursor)
+        btn_card.setProperty("class", "PayBtn")
+        btn_card.setStyleSheet("background-color:#0a84ff; color:white; height: 80px;")
         btn_card.clicked.connect(self.card_payment)
         
         pay_lay.addWidget(btn_cash)
@@ -2539,47 +1884,7 @@ class NexusPOS(QMainWindow):
         
         self.load_categories_grid()
 
-    
-    def set_payment_processing(self, is_processing, btn_type=""):
-        """
-        İşlem sırasında butonları kilitler ve görsel geri bildirim verir.
-        btn_type: 'NAKİT' veya 'KART'
-        """
-        # Sağ paneldeki butonları bul (Object Name ile)
-        # Not: Butonları oluştururken setProperty("class", "PayBtn") kullanmıştık ama
-        # findChild için setObjectName kullanmak daha garantidir. 
-        # Aşağıda buton oluşturma kodunda objectName ekleyeceğiz.
-        
-        btn_cash = self.findChild(QPushButton, "BtnCash") 
-        btn_card = self.findChild(QPushButton, "BtnCard") 
-
-        if is_processing:
-            # İşlem BAŞLADI: Butonları kilitle (Çift tıklama olmasın)
-            if btn_cash: btn_cash.setEnabled(False)
-            if btn_card: btn_card.setEnabled(False)
-            
-            # Görsel Efekt (Sarı Kenarlık ve Yazı)
-            style_processing = "background-color:#30d158; color:black; border: 4px solid #ffcc00; height: 80px; font-size:18px;"
-            style_processing_card = "background-color:#0a84ff; color:white; border: 4px solid #ffcc00; height: 80px; font-size:18px;"
-
-            if btn_type == "NAKİT" and btn_cash:
-                btn_cash.setText("⏳ İŞLENİYOR...")
-                btn_cash.setStyleSheet(style_processing)
-            elif btn_type == "KART" and btn_card:
-                btn_card.setText("⏳ POS BEKLENİYOR...")
-                btn_card.setStyleSheet(style_processing_card)
-                
-        else:
-            # İşlem BİTTİ: Butonları aç ve eski haline getir
-            if btn_cash: 
-                btn_cash.setEnabled(True)
-                btn_cash.setText("NAKİT")
-                btn_cash.setStyleSheet("background-color:#30d158; color:black; height: 80px;")
-                
-            if btn_card: 
-                btn_card.setEnabled(True)
-                btn_card.setText("KART")
-                btn_card.setStyleSheet("background-color:#0a84ff; color:white; height: 80px;")
+    # NexusPOS sınıfı içinde:
 
     def create_cart_table(self):
         """Çerçevesiz ve modern tablo oluşturur."""
@@ -2605,7 +1910,13 @@ class NexusPOS(QMainWindow):
         # CSS ile çizgileri yönetiyoruz
         # border: none -> Tablo çerçevesi yok
         # QHeaderView::section -> Başlık altındaki çizgi hariç kenarlık yok
-        table.setStyleSheet("background-color: transparent; border: none;")
+        table.setStyleSheet("""
+            QTableWidget { background-color: transparent; border: none; color: #ddd; font-size: 16px; }
+            QTableWidget::item { padding: 12px 5px; border-bottom: 1px solid #2a2a2a; } /* Hafif satır çizgisi */
+            QTableWidget::item:selected { background-color: #252525; color: #fff; border-radius: 5px; }
+            QHeaderView::section { background-color: transparent; color: #666; border: none; border-bottom: 2px solid #333; font-weight: bold; font-size: 13px; }
+            QLineEdit { background: #333; color: white; border: 1px solid #0a84ff; border-radius: 5px; }
+        """)
 
         table.itemChanged.connect(self.on_cart_item_changed)
         table.itemClicked.connect(self.row_selected)
@@ -2744,6 +2055,7 @@ class NexusPOS(QMainWindow):
             def on_click(n, p):
                 self.add_to_cart(n, p)
             
+            # ProductCard oluştur
             card = ProductCard(pid, name, price, img, fav, stock, on_click, lambda: self.load_products_grid(category_name), self.db, is_mini=True)
             # Boyutu biraz ayarlayalım ızgaraya sığsın
             card.setFixedSize(140, 160) 
@@ -2757,93 +2069,115 @@ class NexusPOS(QMainWindow):
 
     def load_categories_grid(self):
         self.clear_selection_area()
-        self.search_bar.setPlaceholderText("🔍 Tüm ürünlerde ara...")
         
-        # Layout Ayarları
+        # ANA LAYOUT AYARLARI
         self.selection_lay.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.selection_lay.setSpacing(0)
+        self.selection_lay.setContentsMargins(0, 0, 0, 0)
         
-        # --- BAŞLIKLAR (Eski koddaki gibi) ---
+        self.selection_scroll.setMaximumHeight(16777215)
+        self.selection_scroll.setWidgetResizable(True)
+
+        # 1. KATEGORİ BAŞLIĞI
         lbl_cat = QLabel("KATEGORİLER")
         lbl_cat.setStyleSheet("color: #0a84ff; font-weight: 800; font-size: 14px; margin: 10px 0 5px 10px;")
         self.selection_lay.addWidget(lbl_cat, 0, 0, 1, 3)
 
-        # --- SCROLL VE GRID ---
+        # 2. KATEGORİ SCROLL (SABİT YÜKSEKLİK)
         cat_scroll = QScrollArea()
-        cat_scroll.setFixedHeight(320) # Yükseklik artırıldı
+        cat_scroll.setFixedHeight(250)
         cat_scroll.setWidgetResizable(True)
-        cat_scroll.setStyleSheet("border: none; background: transparent;")
         cat_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        cat_scroll.setStyleSheet("""
+            QScrollArea { border: none; background: transparent; }
+            QScrollBar:vertical { background: #121212; width: 0px; } /* Scrollbar'ı gizledik */
+        """)
+        
         cat_container = QWidget()
+        cat_container.setStyleSheet("background: transparent;")
         cat_grid = QGridLayout(cat_container)
-        cat_grid.setContentsMargins(10, 0, 10, 0)
-        cat_grid.setSpacing(15)
+        cat_grid.setContentsMargins(5, 0, 5, 0) 
+        cat_grid.setSpacing(10)
         cat_grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
 
-        # 1. TÜM ÜRÜNLER KARTI (Özel Stil)
+        # KARTLARI DİZME
+        categories = self.db.get_all_categories()
+        
         def show_all():
             self.load_products_grid("Tüm Ürünler")
-        all_card = CategoryCard("Tüm Ürünler", lambda x: show_all(), is_all_products=True)
+            
+        all_card = CategoryCard("Tüm Ürünler", lambda x: show_all())
+        all_card.setStyleSheet(all_card.styleSheet() + "QFrame { border: 1px dashed #555; }")
         cat_grid.addWidget(all_card, 0, 0)
 
-        # 2. DİĞER KATEGORİLER
-        categories = self.db.get_all_categories()
         c_row = 0
         c_col = 1 
         max_cat_col = 3 
 
         for cat in categories:
             if cat == "Tüm Ürünler": continue
+            # CategoryCard'ı parametrelerle çağırıyoruz
             card = CategoryCard(cat, self.load_products_grid, is_add_button=False, db_manager=self.db, refresh_cb=self.refresh_ui)
             cat_grid.addWidget(card, c_row, c_col)
+            
             c_col += 1
             if c_col >= max_cat_col:
                 c_col = 0
                 c_row += 1
         
-        # 3. EKLEME KARTI
+        # (+) Yeni Kategori Butonu
         def trigger_add_cat(_):
             self.add_category()
-        add_card = CategoryCard("Kategori Ekle", trigger_add_cat, is_add_button=True)
+            
+        add_card = CategoryCard("Yeni Kategori", trigger_add_cat, is_add_button=True)
         cat_grid.addWidget(add_card, c_row, c_col)
 
         cat_scroll.setWidget(cat_container)
         self.selection_lay.addWidget(cat_scroll, 1, 0, 1, 3)
 
-        # --- ALT KISIM (ARA ÇİZGİ VE FAVORİLER) ---
+        # 3. ARA ÇİZGİ
         line = QFrame()
         line.setFrameShape(QFrame.HLine)
         line.setStyleSheet("background-color: #333; margin: 15px 0;")
         self.selection_lay.addWidget(line, 2, 0, 1, 3)
 
+        # 4. HIZLI ERİŞİM
         lbl_fav = QLabel("HIZLI ERİŞİM")
         lbl_fav.setStyleSheet("color: #ffcc00; font-weight: 800; font-size: 14px; margin-left: 10px;")
         self.selection_lay.addWidget(lbl_fav, 3, 0, 1, 3)
 
-        # Favorileri yükle (Eski kodunun aynısı)
         fav_container = QWidget()
         fav_grid = QGridLayout(fav_container)
         fav_grid.setContentsMargins(5, 5, 5, 5)
         fav_grid.setSpacing(10)
         fav_grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        
+
         favorites = self.db.get_favorites()
         if favorites:
-            f_row, f_col = 0, 0
+            f_row = 0
+            f_col = 0
+            max_fav_col = 4 
+            
             for pid, name, price, img, fav, stock in favorites:
                 card = ProductCard(pid, name, price, img, fav, stock, self.add_to_cart, self.refresh_ui, self.db, is_mini=True)
                 card.setFixedSize(120, 150)
                 fav_grid.addWidget(card, f_row, f_col)
+                
                 f_col += 1
-                if f_col >= 4:
+                if f_col >= max_fav_col:
                     f_col = 0
                     f_row += 1
+            
             self.selection_lay.addWidget(fav_container, 4, 0, 1, 3)
         else:
-            self.selection_lay.addWidget(QLabel("Henüz favori ürün yok.", styleSheet="color: #555; margin-left: 10px;"), 4, 0, 1, 3)
-            
+            lbl_empty = QLabel("Henüz favori ürün yok.")
+            lbl_empty.setStyleSheet("color: #555; font-style: italic; margin-left: 10px;")
+            self.selection_lay.addWidget(lbl_empty, 4, 0, 1, 3)
+
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Expanding)
         self.selection_lay.addWidget(spacer, 5, 0)
+        self.selection_lay.setRowStretch(5, 1)
 
     def on_search_changed(self, text):
         """Arama kutusu değiştiğinde çalışır"""
@@ -2895,7 +2229,7 @@ class NexusPOS(QMainWindow):
     def update_ciro(self):
         daily = self.db.get_daily_turnover()
         if self.ciro_visible:
-            self.lbl_ciro.setText(f"Ciro: {daily:.2f} ₺") 
+            self.lbl_ciro.setText(f"Ciro: {daily:.2f} ₺")
         else:
             self.lbl_ciro.setText("Ciro: ***")
 
@@ -2952,10 +2286,15 @@ class NexusPOS(QMainWindow):
     def add_to_cart(self, name, price):
         table = self.get_active_table()
         
-        # 1. Önce Ürünü Tabloya Ekle/Güncelle
         found_row = -1
-        
-        # Tabloda ürün var mı kontrol et
+        current_cart = [item['name'] for item in self.get_current_cart()]
+        suggestion = self.ai.recommend_product(current_cart)
+        if suggestion:
+            self.search_bar.setPlaceholderText(f"💡 ÖNERİ: Müşteriye '{suggestion}' teklif edin!")
+            # İsterseniz sesli uyarı veya popup da koyabilirsiniz ama bu en zarifi.
+        else:
+            self.search_bar.setPlaceholderText("🔍 Ürün Ara...")
+
         for row in range(table.rowCount()):
             item = table.item(row, 0)
             if item and item.text() == name:
@@ -2963,7 +2302,6 @@ class NexusPOS(QMainWindow):
                 break
         
         if found_row != -1:
-            # Varsa Adeti Artır
             qty_item = table.item(found_row, 2)
             try:
                 cur_qty = int(qty_item.text())
@@ -2977,18 +2315,18 @@ class NexusPOS(QMainWindow):
             self.selected_row = found_row
             
         else:
-            # Yoksa Yeni Satır Ekle
             row = table.rowCount()
             table.insertRow(row)
             
-            # Ürün Adı
+            # Ürün Adı (Çizgisiz, sade)
             it_name = QTableWidgetItem(str(name))
             it_name.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
             table.setItem(row, 0, it_name)
             
-            # Fiyat
+            # Fiyat (Bunu belirgin yapıyoruz)
             it_price = QTableWidgetItem(f"{float(price):.2f}")
             it_price.setTextAlignment(Qt.AlignCenter)
+            # Fiyatı düzenlenebilir yapıyoruz
             it_price.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
             table.setItem(row, 1, it_price)
             
@@ -3000,7 +2338,7 @@ class NexusPOS(QMainWindow):
             it_qty.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
             table.setItem(row, 2, it_qty)
             
-            # Sil Butonu
+            # Sil Butonu (Sadeleştirildi)
             btn = QPushButton("Sil")
             btn.setCursor(Qt.PointingHandCursor)
             btn.setStyleSheet("""
@@ -3015,31 +2353,23 @@ class NexusPOS(QMainWindow):
 
         self.recalc_active_cart_total()
 
-        # 2. AI Öneri Kısmı (HATANIN OLDUĞU YER DÜZELTİLDİ)
-        suggestion = None  # <-- ÖNEMLİ: Değişkeni başta boş olarak tanımlıyoruz
-
         try:
-            # Sepetteki ürün isimlerini al
-            current_cart_names = []
-            for r in range(table.rowCount()):
-                item = table.item(r, 0)
-                if item:
-                    current_cart_names.append(item.text())
+            # Şu anki sepetteki ürün isimlerini al
+            current_cart_names = [item['name'] for item in self.get_current_cart()]
             
             # AI'dan öneri iste
             suggestion = self.ai.recommend_product(current_cart_names)
             
+            # Öneri varsa arama çubuğunda göster
+            if suggestion:
+                self.search_bar.setPlaceholderText(f"💡 AI ÖNERİSİ: Müşteriye '{suggestion}' önerin!")
+                # İsterseniz arama kutusunun stilini değiştirip dikkat çekebilirsiniz
+                self.search_bar.setStyleSheet("QLineEdit { background-color: #2a1a1a; color: #ffcc00; border: 1px solid #ffcc00; border-radius: 10px; padding-left: 10px; }")
+            else:
+                self.search_bar.setPlaceholderText("🔍 Ürün Ara...")
+                self.search_bar.setStyleSheet("QLineEdit { background-color: #252525; color: white; border-radius: 10px; padding-left: 10px; }")
         except Exception as e:
             print(f"AI Hatası: {e}")
-            suggestion = None
-
-        # 3. Öneriyi Ekrana Yaz
-        if suggestion:
-            self.search_bar.setPlaceholderText(f"💡 ÖNERİ: Müşteriye '{suggestion}' teklif edin!")
-            self.search_bar.setStyleSheet("QLineEdit { background-color: #2a1a1a; color: #ffcc00; border: 1px solid #ffcc00; border-radius: 10px; padding-left: 10px; }")
-        else:
-            self.search_bar.setPlaceholderText("🔍 Ürün Ara...")
-            self.search_bar.setStyleSheet("QLineEdit { background-color: #252525; color: white; border-radius: 10px; padding-left: 10px; }")
 
     def smart_delete_row(self, button_widget):
         """Silme butonuna basıldığında çalışır"""
@@ -3131,6 +2461,44 @@ class NexusPOS(QMainWindow):
                 self.barcode_buffer += e.text()
 
 
+    def card_payment(self):
+        if not self.cart_data: 
+            QMessageBox.warning(self, "Uyarı", "Sepet boş!")
+            return
+            
+        # POS bağlantı testi
+        test_pos = IngenicoMove5000F(POS_IP, POS_PORT)
+        if not test_pos.connect():
+            reply = QMessageBox.question(
+                self, 
+                "POS Bağlantı Hatası", 
+                "POS cihazına bağlanılamadı!\n\nNakit ödeme ile devam etmek ister misiniz?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                self.finish_sale("Nakit")
+            return
+        test_pos.disconnect()
+    
+    # Bağlantı başarılı, işleme devam et
+        self.pd = QProgressDialog(
+            "🔄 POS'a Bağlanılıyor...\n\n⏳ Lütfen Kartı Okutunuz", 
+            "İptal", 0, 0, self
+        )
+        self.pd.setWindowModality(Qt.WindowModal)
+        self.pd.setWindowTitle("POS İşlemi")
+        self.pd.setMinimumDuration(0)
+        self.pd.show()
+        
+        total = sum([x['price'] * x['qty'] for x in self.cart_data])
+        self.worker = PaymentWorker(total)
+        self.worker.finished.connect(self.on_pos_result)
+        self.worker.start()
+    def add_customer_tab(self, name):
+        tab = CustomerCartTab()
+        tab.totalChanged.connect(self.update_total_display)
+        self.cart_tabs.addTab(tab, name)
+
     def get_current_cart(self):
         """Aktif sekmedeki sepeti döndürür"""
         return self.cart_tabs.currentWidget()
@@ -3185,79 +2553,37 @@ class NexusPOS(QMainWindow):
             cart.update_row_qty(row, new_val)
 
     def finish_sale(self, method):
-        """NAKİT butonu - Yükleme Ekransız"""
-        if not self.cart_data:
-            QMessageBox.warning(self, "Uyarı", "Sepet boş!")
-            return
+        cart = self.get_current_cart()
+        if not cart or not cart.cart_data: return
         
-        total = sum([x['price'] * x['qty'] for x in self.cart_data])
+        total = sum([x['price'] * x['qty'] for x in cart.cart_data])
         
-        # 1. Butona basıldığını belli et
-        self.set_payment_processing(True, "NAKİT")
-        
-        # 2. İşlemi başlat (Arka planda)
-        # Not: PaymentWorker sınıfın (total, method) alacak şekilde ayarlı olmalı
-        self.worker = PaymentWorker(total, method)
-        self.worker.finished.connect(self.on_pos_result)
-        self.worker.start()
-
-    def card_payment(self):
-        """KART butonu - Yükleme Ekransız"""
-        if not self.cart_data:
-            QMessageBox.warning(self, "Uyarı", "Sepet boş!")
-            return
-        
-        total = sum([x['price'] * x['qty'] for x in self.cart_data])
-        
-        # 1. Butona basıldığını belli et
-        self.set_payment_processing(True, "KART")
-        
-        # 2. İşlemi başlat (Arka planda)
-        self.worker = PaymentWorker(total, "CARD")
-        self.worker.finished.connect(self.on_pos_result)
-        self.worker.start()
+        try:
+            # Satışı kaydet
+            alerts = self.db.record_sale(cart.cart_data, total, method)
+            if alerts: QMessageBox.warning(self, "Stok Uyarısı", "\n".join(alerts))
+            
+            # Sepeti Temizle (Satırları sil)
+            cart.table.setRowCount(0)
+            cart.recalc_total()
+            
+            self.update_ciro()
+            QMessageBox.information(self, "Başarılı", f"{method} satışı tamamlandı!")
+        except Exception as e:
+            QMessageBox.critical(self, "Hata", str(e))
 
     def on_pos_result(self, result):
-        """POS yanıtı geldiğinde çalışır"""
-        
-        # 1. Butonları eski haline döndür (Görsel efekti kapat)
-        self.set_payment_processing(False)
-        
-        if result['success']:
-            # ✅ Başarılı
-            method = result.get('method', 'Bilinmeyen') # method dönmüyorsa hata almamak için get kullan
-            
-            # İstersen başarılı mesajını da kaldırabilirsin, POS fiş yazıyor zaten.
-            # Şimdilik bilgi veriyoruz:
-            QMessageBox.information(
-                self, 
-                "✅ İşlem Başarılı", 
-                f"{method} ödemesi onaylandı!\nTutar: {result['amount']:.2f} ₺"
-            )
-            
-            try:
-                # Veritabanına Kaydet
-                alerts = self.db.record_sale(self.cart_data, result['amount'], method)
-                if alerts:
-                    QMessageBox.warning(self, "Stok Uyarısı", "\n".join(alerts))
-                
-                # Sepeti Temizle
-                table = self.get_active_table()
-                table.setRowCount(0)
-                self.cart_data = []
-                self.recalc_active_cart_total()
-                self.update_ciro()
-                
-            except Exception as e:
-                QMessageBox.critical(self, "Kayıt Hatası", str(e))
-        
-        else:
-            # ❌ Başarısız
-            if result.get('timeout'):
-                QMessageBox.warning(self, "Zaman Aşımı", "POS yanıt vermedi.")
-            else:
-                msg = result.get('message', 'Hata oluştu')
-                QMessageBox.critical(self, "İşlem Başarısız", msg)            
+       self.pd.close()
+       if result.get('state') == 'APPROVED':
+           auth = result.get('auth_code', '')
+           rrn = result.get('receipt_no', '')
+           QMessageBox.information(self, "✅ Ödeme Onaylandı", f"İşlem başarılı!\nAuth:{auth}\nRRN:{rrn}")
+           self.finish_sale("Kredi Kartı")
+       elif result.get('pending'):
+           QMessageBox.warning(self, "⚠️ İşlem Beklemede", "POS yanıt vermedi. İşlem askıya alındı.")
+           self.mark_pending(result)
+       else:
+           QMessageBox.critical(self, "❌ POS Hatası", result.get('msg', 'Bilinmeyen Hata'))
 
     def mark_pending(self, result):
        tx_id = result.get('tx_id')
@@ -3367,46 +2693,35 @@ class NexusPOS(QMainWindow):
 # YÖNETİM PANELİ
 # ==========================================
 class AdminDialog(QDialog):
+    # AdminDialog sınıfının __init__ metodunu şu şekilde sadeleştirin:
     def __init__(self, db, parent=None):
         super().__init__(parent)
         self.db = db
         self.setWindowTitle("Yönetim Paneli")
-        self.resize(1200, 800)
-
-        # --- DÜZELTME BURADA BAŞLIYOR ---
-        
-        # 1. Önce Layout ve Tabs OLUŞTURULMALI
-        layout = QVBoxLayout(self)
-        
+        self.resize(1200, 800) # Biraz daha genişletelim
+        self.setStyleSheet("background:#1a1a1a; color:white;")
+        layout = QVBoxLayout(self)        
         self.tabs = QTabWidget()
-        # Sekme değiştiğinde veriyi yenilemek için sinyal:
         self.tabs.currentChanged.connect(self.on_tab_change) 
-        
         layout.addWidget(self.tabs)
-        
-        # 2. Değişkenleri Tanımla
+        self.setup_ai_center()
+
         self.editing_pid = None
         self.filter_mode = 'day'
         self.last_tab_index = 0
-
-        # 3. ŞİMDİ Setup Fonksiyonlarını Çağırabiliriz (Çünkü self.tabs artık var)
-        self.setup_ai_center()            # Void AI
-        self.setup_finances()             # Tab 0 (Finans)
-        self.setup_sales_history()        # Tab 1 (Geçmiş)
-        self.setup_prod_list()            # Tab 2 (Liste)
-        self.setup_add_prod()             # Tab 3 (Ekle)
-        self.setup_stock_tracking()       # Tab 4 (Stok)
-        self.setup_pending_transactions() # Tab 5 (Bekleyen)
-        self.setup_bulk_operations()      # Tab 6 (Toplu İşlem)
-        self.setup_theme_settings()       # Tab 7 (Tema - Yeni Eklediğimiz)
         
-        # 4. İlk veriyi yükle
+        # ARAYÜZLERİ KURUYORUZ AMA VERİLERİ HENÜZ YÜKLEMİYORUZ!
+        self.setup_finances()             # Tab 0
+        self.setup_sales_history()        # Tab 1
+        self.setup_prod_list()            # Tab 2
+        self.setup_add_prod()             # Tab 3
+        self.setup_stock_tracking()       # Tab 4
+        self.setup_pending_transactions() # Tab 5
+        self.setup_bulk_operations()      # Tab 6
         self.load_finance_data()
-        
 
-    def setup_theme_settings(self):
-        editor = ThemeEditor(self)
-        self.tabs.addTab(editor, "🎨 Tema Ayarları")
+
+    # AdminDialog Sınıfı İçinde:
 
     def setup_ai_center(self):
         self.ai = AIService(self.db.db_name)
@@ -3571,7 +2886,10 @@ class AdminDialog(QDialog):
         self.lbl_form_title.setStyleSheet("font-size: 22px; font-weight: bold; color: #ff9f0a;") # Turuncu başlık
         
         self.btn_save.setText("GÜNCELLE")
-        self.btn_save.setProperty("class", "SuccessBtn")
+        self.btn_save.setStyleSheet("""
+            QPushButton { background-color: #ff9f0a; color: black; font-weight: bold; font-size: 16px; border-radius: 10px; }
+            QPushButton:hover { background-color: #e08e0b; }
+        """)
         
         # Sekmeyi "Ürün Ekle / Düzenle"ye (Index 3) kaydır
         self.tabs.setCurrentIndex(3)
@@ -3680,19 +2998,17 @@ class AdminDialog(QDialog):
                 QMessageBox.critical(self, "Hata", msg)
 
     def import_csv(self):
+        # Dosya açma penceresi aç
         path, _ = QFileDialog.getOpenFileName(self, "CSV Dosyası Seç", "", "CSV Dosyaları (*.csv)")
         if path:
-            reply = QMessageBox.question(self, "Onay", "Veritabanı güncellenecek. Devam?", QMessageBox.Yes | QMessageBox.No)
+            reply = QMessageBox.question(self, "Onay", "Veritabanı bu dosyadan güncellenecek.\nBu işlem geri alınamaz!\nDevam edilsin mi?", QMessageBox.Yes | QMessageBox.No)
             if reply == QMessageBox.Yes:
                 success, msg = self.db.import_products_from_csv(path)
                 if success:
                     QMessageBox.information(self, "Başarılı", msg)
-                    
-                    # --- EKRANI TAMAMEN YENİLE ---
-                    self.load_categories_grid()  # Sol paneldeki kategori butonlarını yeniler
+                    # Listeyi yenile ki değişiklikleri görelim
                     if hasattr(self, 'load_table_data'):
-                        self.load_table_data()   # Admin panelindeki listeyi yeniler
-                    # -----------------------------
+                        self.load_table_data() 
                 else:
                     QMessageBox.critical(self, "Hata", msg)
 
@@ -3965,104 +3281,69 @@ class AdminDialog(QDialog):
         w = QWidget()
         l = QVBoxLayout(w)
         
-        # --- ARAMA VE FİLTRE ALANI (YENİLENDİ) ---
-        top_bar = QHBoxLayout()
-        top_bar.setSpacing(10)
-
-        # 1. Arama Çubuğu (YENİ)
-        self.inp_admin_search = QLineEdit()
-        self.inp_admin_search.setPlaceholderText("🔍 Yönetimde Ürün Ara (İsim veya Barkod)")
-        self.inp_admin_search.setStyleSheet("padding:8px; background:#1a1a1a; border:1px solid #444; color:white; border-radius: 5px;")
-        self.inp_admin_search.textChanged.connect(self.load_table_data) # Yazdıkça filtrele
-        
-        # 2. Kategori Filtresi
+        h = QHBoxLayout()
         self.cmb_filter = QComboBox()
         self.cmb_filter.addItems(["Tüm Ürünler"] + self.db.get_all_categories())
-        self.cmb_filter.setStyleSheet("padding:8px; background:#252525; border:1px solid #444; color:white;")
+        self.cmb_filter.setStyleSheet("padding:8px; background:#252525; border:1px solid #404040; color:white;")
         self.cmb_filter.currentTextChanged.connect(self.load_table_data)
         
-        top_bar.addWidget(self.inp_admin_search, stretch=3) # Arama çubuğu geniş olsun
-        top_bar.addWidget(self.cmb_filter, stretch=1)
-        l.addLayout(top_bar)
-        # -----------------------------------------
+        h.addWidget(QLabel("Kategori:"))
+        h.addWidget(self.cmb_filter)
+        h.addStretch()
+        l.addLayout(h)
         
         self.table = QTableWidget()
-        self.table.setColumnCount(7) 
+        self.table.setColumnCount(7) # ID, AD, FİYAT, STOK, BARKOD, KRİTİK, SİL
         self.table.verticalHeader().setDefaultSectionSize(50)
         self.table.setHorizontalHeaderLabels(["ID", "AD", "FİYAT", "STOK", "BARKOD", "KRİTİK", "İŞLEM"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Fixed) 
+        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Fixed) # Sil butonu sabit
         self.table.setColumnWidth(6, 100)
-        
-        # Fiyat sütununu belirgin yapalım (Excel gibi düzenlenebilsin diye)
         self.table.setStyleSheet("""
             QTableWidget { background:#252525; border:none; gridline-color:#333; color: white; font-size:14px; }
             QTableWidget::item { padding: 5px; }
             QTableWidget::item:selected { background:#0a84ff; }
-            /* Düzenleme modundaki kutucuk */
-            QLineEdit { background: #333; color: #ffcc00; font-weight: bold; border: 2px solid #0a84ff; }
+            QLineEdit { background: #333; color: white; border: 1px solid #0a84ff; }
         """)
         
+        # --- Yerinde Düzenleme Sinyali ---
         self.table.itemChanged.connect(self.on_prod_cell_changed)
         
         l.addWidget(self.table)
-        
-        # Bilgi Notu
-        info_lbl = QLabel("💡 İPUCU: Fiyatı veya Stoğu değiştirmek için tablo hücresine ÇİFT TIKLAYIN, değeri yazıp ENTER'a basın. Anında güncellenir.")
-        info_lbl.setStyleSheet("color: #888; font-style: italic; margin-top: 5px;")
-        l.addWidget(info_lbl)
-        
+        l.addWidget(QLabel("* Hücrelere çift tıklayarak düzenleyebilirsiniz. 'Sil' butonu kalıcı olarak siler."))
         self.tabs.addTab(w, "Ürün Listesi")
         self.load_table_data()
 
     def load_table_data(self):
-        """Hem Arama Çubuğuna Hem Kategoriye Göre Filtreler"""
         cat = self.cmb_filter.currentText()
-        search_text = self.inp_admin_search.text().strip() # Arama metni
-        
-        query = "SELECT id, name, sell_price, stock, barcode, critical_stock FROM products WHERE 1=1"
-        params = []
-
-        # 1. Kategori Filtresi
         if cat != "Tüm Ürünler":
-            query += " AND category = ?"
-            params.append(cat)
-        
-        # 2. Metin Araması (İsim veya Barkod)
-        if search_text:
-            query += " AND (name LIKE ? OR barcode LIKE ?)"
-            params.append(f"%{search_text}%")
-            params.append(f"%{search_text}%")
+            q = "SELECT id, name, sell_price, stock, barcode, critical_stock FROM products WHERE category=?"
+            data = self.db.cursor.execute(q, (cat,)).fetchall()
+        else:
+            q = "SELECT id, name, sell_price, stock, barcode, critical_stock FROM products"
+            data = self.db.cursor.execute(q).fetchall()
             
-        data = self.db.cursor.execute(query, params).fetchall()
-            
-        self.table.blockSignals(True) 
+        self.table.blockSignals(True) # Yüklerken sinyalleri kapat (döngüye girmesin)
         self.table.setRowCount(0)
         
         for r_idx, row in enumerate(data):
             self.table.insertRow(r_idx)
             
-            # ID 
+            # ID (Düzenlenemez)
             item_id = QTableWidgetItem(str(row[0]))
             item_id.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             self.table.setItem(r_idx, 0, item_id)
             
-            # Diğer kolonlar
-            for c_idx, val in enumerate(row[1:], 1):
+            # Diğer kolonlar (Düzenlenebilir)
+            for c_idx, val in enumerate(row[1:], 1): # 1'den başla çünkü ID'yi koyduk
                 item = QTableWidgetItem(str(val if val is not None else ""))
-                item.setFlags(item.flags() | Qt.ItemIsEditable) # Düzenlenebilir
-                
-                # Fiyat kolonu (Index 2) ise rengini farklı yap
-                if c_idx == 2:
-                    item.setForeground(QColor("#30d158")) # Yeşil
-                    item.setFont(QFont("Segoe UI", 11, QFont.Bold))
-                
+                item.setFlags(item.flags() | Qt.ItemIsEditable)
                 self.table.setItem(r_idx, c_idx, item)
             
             # Sil Butonu
             btn_del = QPushButton("SİL")
             btn_del.setCursor(Qt.PointingHandCursor)
-            btn_del.setProperty("class", "DangerBtn")            
+            btn_del.setStyleSheet("background-color: #ff453a; color: white; font-weight: bold; border-radius: 4px;")
             btn_del.clicked.connect(lambda _, pid=row[0]: self.delete_product(pid))
             self.table.setCellWidget(r_idx, 6, btn_del)
 
@@ -4394,7 +3675,7 @@ class AdminDialog(QDialog):
             self.load_table_data()
             QMessageBox.information(self, "Başarılı", "Stok güncellendi.")
 
-    # --- 6. BEKLEYEN İŞLEMLER   ---
+    # --- 6. BEKLEYEN İŞLEMLER (DÜZELTİLDİ VE EKLENDİ) ---
     def setup_pending_transactions(self):
         """Askıdaki POS İşlemleri"""
         w = QWidget()
@@ -4578,11 +3859,11 @@ if __name__ == "__main__":
     from PySide6.QtWidgets import QFormLayout
     app = QApplication(sys.argv)
     
+    # macOS için sistem fontunu kullanalım
     font = QFont(".AppleSystemUIFont", 13) 
-    app.setFont(font)    
+    # Veya manuel olarak: font = QFont("Helvetica Neue", 13)
     
-    app.setStyleSheet(theme_manager.get_stylesheet()) 
-
+    app.setFont(font)    
     window = NexusPOS()
     window.show()
     sys.exit(app.exec())
