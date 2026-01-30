@@ -16,6 +16,7 @@ import csv
 import pandas as pd
 import numpy as np
 import sqlite3
+import random
 
 from sklearn.ensemble import RandomForestRegressor, IsolationForest
 from sklearn.cluster import KMeans
@@ -3854,7 +3855,89 @@ class AdminDialog(QDialog):
             QMessageBox.information(self, "Yedekleme Başarılı", f"Veritabanı yedeklendi:\n{msg}")
         else: 
             QMessageBox.critical(self, "Hata", f"Yedekleme yapılamadı:\n{msg}")
+def demo_verisi_olustur():
+    db = DatabaseManager()
+    
+    # Eğer zaten çok satış varsa tekrar ekleme yapmasın
+    count = db.cursor.execute("SELECT Count(*) FROM sales").fetchone()[0]
+    if count > 10:
+        print("⚠️ Demo verileri zaten var, ekleme yapılmadı.")
+        # Yine de AI uyarısı için bir ürünü kritik yapalım:
+        db.cursor.execute("UPDATE products SET stock=3, critical_stock=5 WHERE name LIKE '%Viski%' OR name LIKE '%Sigara%'")
+        db.conn.commit()
+        return
 
+    print("🔄 Demo simülasyonu başlatılıyor...")
+    
+    # 1. Ürünleri Çek
+    products = db.get_products("Tüm Ürünler")
+    if not products:
+        print("❌ Ürün yok! Önce CSV'den ürün yükleyin.")
+        return
+
+    # 2. Son 30 gün için Rastgele Satışlar Oluştur
+    # Özellikle bir ürünü (örn: listedeki ilk ürün) çok sattıralım ki AI fark etsin.
+    hizli_urun = products[0] 
+    
+    for i in range(30): # Son 30 gün
+        tarih = (datetime.date.today() - datetime.timedelta(days=30-i)).strftime("%Y-%m-%d")
+        
+        # Günde 3 ila 8 arası satış olsun
+        gunluk_islem = random.randint(3, 8)
+        
+        for _ in range(gunluk_islem):
+            # Sepet oluştur
+            sepet = []
+            
+            # %50 ihtimalle "Hızlı Ürün" sepette olsun (Yapay Zeka bunu fark etsin diye)
+            if random.random() > 0.5:
+                sepet.append(hizli_urun)
+            
+            # Rastgele 2 ürün daha ekle
+            sepet.extend(random.sample(products, 2))
+            
+            total_amount = 0
+            sale_profit = 0
+            
+            # Satışı Kaydet (Sales Tablosu)
+            # Önce tutarları hesapla
+            for prod in sepet:
+                pid, name, price, img, fav, stock = prod
+                total_amount += price
+                sale_profit += (price * 0.3) # %30 kar varsayımı
+
+            odeme_tipi = random.choice(["Nakit", "Kredi Kartı"])
+            
+            # Sales tablosuna ekle
+            db.cursor.execute(
+                "INSERT INTO sales (total_amount, total_profit, payment_method, sale_date, receipt_no, timestamp) VALUES (?,?,?,?,?,?)",
+                (total_amount, sale_profit, odeme_tipi, tarih, f"DEMO-{i}", f"{tarih} 14:30:00")
+            )
+            sale_id = db.cursor.lastrowid
+            
+            # Sale_Items tablosuna ekle
+            for prod in sepet:
+                pid, name, price, img, fav, stock = prod
+                db.cursor.execute(
+                    "INSERT INTO sale_items (sale_id, product_name, quantity, sell_price, cost_price, total_price, sale_date, sale_time) VALUES (?,?,?,?,?,?,?,?)",
+                    (sale_id, name, 1, price, price*0.7, price, tarih, f"{tarih} 14:30:00")
+                )
+
+    # 3. Kritik Dokunuş: Hızlı satılan ürünün stoğunu bitir!
+    # Böylece AI: "Bu ürün son 30 günde deli gibi satıldı ama stok 2 kaldı!" diyecek.
+    hizli_urun_id = hizli_urun[0]
+    hizli_urun_adi = hizli_urun[1]
+    
+    db.cursor.execute("UPDATE products SET stock=2, critical_stock=10 WHERE id=?", (hizli_urun_id,))
+    
+    # 4. Bir tane de "Tarihi Geçen" (Ölü Stok) simülasyonu yapalım (Fiyat önerisi için)
+    # Rastgele başka bir ürünün stoğunu şişirelim ama hiç satılmamış olsun
+    if len(products) > 1:
+        olu_urun = products[-1]
+        db.cursor.execute("UPDATE products SET stock=100, critical_stock=5 WHERE id=?", (olu_urun[0],))
+
+    db.conn.commit()
+    print(f"✅ SİMÜLASYON TAMAMLANDI!\n🔥 '{hizli_urun_adi}' ürünü için yapay zeka 'Sipariş Ver' uyarısı üretecek.")
 if __name__ == "__main__":
     from PySide6.QtWidgets import QFormLayout
     app = QApplication(sys.argv)
@@ -3862,7 +3945,7 @@ if __name__ == "__main__":
     # macOS için sistem fontunu kullanalım
     font = QFont(".AppleSystemUIFont", 13) 
     # Veya manuel olarak: font = QFont("Helvetica Neue", 13)
-    
+    demo_verisi_olustur()
     app.setFont(font)    
     window = NexusPOS()
     window.show()
