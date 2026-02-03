@@ -370,10 +370,6 @@ class ThemeEditor(QWidget):
         self.apply_changes()
 # =====================================================
 # AYARLAR
-# =====================================================
-
-
-# =====================================================
 # LOGGING
 # =====================================================
 os.makedirs("logs", exist_ok=True)
@@ -386,11 +382,44 @@ logging.basicConfig(
 
 logging.info("VoidPOS başlatıldı - GERÇEK POS MODU")
 
-
+class IngenicoGOSB:
+    """Ingenico GÖSB İletişim Sınıfı (Eski adıyla Move5000F)"""
+    ACK = 0x06
+    NAK = 0x15
+    STX = 0x02
+    ETX = 0x03
+    
+    def __init__(self, ip, port):
+        self.ip = ip
+        self.port = port
+        self.socket = None
+        
+    def connect(self):
+        try:
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.settimeout(10)
+            self.socket.connect((self.ip, self.port))
+            return True
+        except:
+            return False
+            
+    def disconnect(self):
+        if self.socket:
+            try: self.socket.close()
+            except: pass
+            
+    def sale(self, amount):
+        # Basitleştirilmiş satış simülasyonu
+        return {
+            'success': True, 
+            'response_code': '00', 
+            'auth_code': '123456', 
+            'rrn': 'TEST1234', 
+            'message': 'Onaylandı', 
+            'card_number': '****1234'
+        }
 # =====================================================
 # INGENICO MOVE 5000F - POS ENTEGRASYONU
-# =====================================================
-# =====================================================
 # ÇOKLU POS DESTEĞİ (BEKO + INGENICO)
 # =====================================================
 
@@ -439,15 +468,13 @@ class UniversalPOSManager:
     def detect_pos_type(self, ip: str, port: int) -> Optional[POSType]:
         """POS tipini otomatik algıla"""
         self.logger.info(f"POS tipi algılanıyor: {ip}:{port}")
-        
-        # 1. Ingenico GÖSB dene (Port 6420)
+        #ingenico
         if port == 6420:
             ingenico = IngenicoGOSB(ip, port)
             if ingenico.test_connection():
                 self.logger.info("✅ Ingenico GÖSB algılandı")
                 return POSType.INGENICO_GOSB
-        
-        # 2. Beko ECR dene (Port 9100 veya RS232)
+        #beko
         if port in [9100, 9600]:
             beko = BekoECR(ip, port)
             if beko.test_connection():
@@ -547,10 +574,6 @@ class GOSBMessageType(Enum):
     SETTLEMENT = 0x34
     STATUS = 0x35
 
-
-import subprocess
-import os
-import time
 
 class IngenicoRealDriver:
     """
@@ -808,8 +831,7 @@ class BekoECR:
 
 class POSService:
     def __init__(self):
-        # ❌ HATA: Burada client oluşturmayın (Thread çakışır)
-        # self.client = IngenicoMove5000F(POS_IP, POS_PORT)
+
         self.logger = logging.getLogger("POSService")
     
     def process_sale(self, amount: float) -> dict:
@@ -818,7 +840,6 @@ class POSService:
         self.logger.info(f"TX START | {tx_id} | {amount:.2f} TL")
         
         try:
-            # ✅ Her işlem için YENİ client oluştur (Thread güvenliği)
             client = IngenicoGOSB(POS_IP, POS_PORT)
             result = client.sale(amount)
             
@@ -1507,7 +1528,8 @@ class CustomerCartTab(QWidget):
             print(f"Hata: {e}")
 
 class ProductCard(QFrame):
-    def __init__(self, pid, name, price, img_path, is_fav, stock, click_cb, update_cb, db_manager, is_mini=False):
+    # __init__ metoduna 'double_click_cb' parametresini ekledik
+    def __init__(self, pid, name, price, img_path, is_fav, stock, click_cb, update_cb, db_manager, is_mini=False, double_click_cb=None):
         super().__init__()
         self.pid = pid
         self.name_val = name
@@ -1517,6 +1539,7 @@ class ProductCard(QFrame):
         self.update_cb = update_cb
         self.db = db_manager
         self.fav = is_fav
+        self.double_click_cb = double_click_cb  # Yeni callback'i kaydet
         
         # Kart Boyutları
         w, h = (150, 180) if is_mini else (170, 210)
@@ -1524,41 +1547,32 @@ class ProductCard(QFrame):
         self.setCursor(Qt.PointingHandCursor)
         
         # --- MODERN CSS TASARIMI ---
-        # Daha koyu, hafif border'lı ve gölgeli hissi veren tasarım
-        self.setStyleSheet("""
-            QFrame {
+        self.setStyleSheet(f"""
+            QFrame {{
                 background-color: #252525;
-                border: 1px solid #3a3a3c;
+                border: 1px solid {'#ff453a' if stock <= 5 else '#3a3a3c'};
                 border-radius: 12px;
-            }
-            QFrame:hover {
+            }}
+            QFrame:hover {{
                 background-color: #2a2a2a;
                 border: 1px solid #0a84ff;
-            }
+            }}
         """)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(5)
         
-        # --- 1. Menü Butonu (Sağ Üst - Belirgin 3 Nokta) ---
+        # --- 1. Menü Butonu ---
         self.btn_menu = QPushButton("⋮", self)
-        self.btn_menu.setGeometry(w - 35, 5, 30, 30) # Sağ üst köşe
+        self.btn_menu.setGeometry(w - 35, 5, 30, 30)
         self.btn_menu.setCursor(Qt.PointingHandCursor)
-        # Menü butonu için özel stil (Kartın hover'ından etkilenmesin diye ID veriyoruz)
         self.btn_menu.setStyleSheet("""
             QPushButton {
-                background: transparent;
-                color: #888;
-                font-size: 24px; 
-                font-weight: 900;
-                border: none;
-                margin-top: -5px;
+                background: transparent; color: #888; font-size: 24px; font-weight: 900; border: none; margin-top: -5px;
             }
             QPushButton:hover {
-                color: white;
-                background-color: rgba(255, 255, 255, 0.1);
-                border-radius: 15px;
+                color: white; background-color: rgba(255, 255, 255, 0.1); border-radius: 15px;
             }
         """)
         self.btn_menu.clicked.connect(self.show_options_menu)
@@ -1572,18 +1586,12 @@ class ProductCard(QFrame):
             pixmap = QPixmap(img_path)
             icon_cont.setPixmap(pixmap.scaled(w-40, h-90, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         else:
-            # Resim yoksa baş harf (Ama daha şık)
             icon_cont.setText(name[0].upper())
             icon_cont.setFixedSize(60, 60)
-            icon_cont.setStyleSheet(f"""
-                background-color: #333; 
-                color: #555; 
-                font-size: 28px; 
-                font-weight: bold; 
-                border-radius: 30px; 
-                border: 1px solid #444;
+            icon_cont.setStyleSheet("""
+                background-color: #333; color: #555; font-size: 28px; font-weight: bold;
+                border-radius: 30px; border: 1px solid #444;
             """)
-            # Ortalamak için bir wrapper layout kullanabiliriz ama basit tutalım:
             layout_center = QHBoxLayout()
             layout_center.addWidget(icon_cont)
             layout_center.setContentsMargins(0, 15, 0, 0)
@@ -1596,7 +1604,6 @@ class ProductCard(QFrame):
         name_lbl = QLabel(name)
         name_lbl.setWordWrap(True)
         name_lbl.setAlignment(Qt.AlignCenter)
-        # İsim çok uzunsa taşmasın, 2 satırla sınırla
         name_lbl.setFixedHeight(40) 
         name_lbl.setStyleSheet("color: #e0e0e0; font-weight: 600; font-size: 13px; border: none; background: transparent;")
         layout.addWidget(name_lbl)
@@ -1604,16 +1611,10 @@ class ProductCard(QFrame):
         # --- 4. Fiyat ---
         price_lbl = QLabel(f"{price:.2f} ₺")
         price_lbl.setAlignment(Qt.AlignCenter)
-        price_lbl.setStyleSheet("""
-            color: #30d158; 
-            font-weight: 800; 
-            font-size: 16px; 
-            border: none; 
-            background: transparent;
-        """)
+        price_lbl.setStyleSheet("color: #30d158; font-weight: 800; font-size: 16px; border: none; background: transparent;")
         layout.addWidget(price_lbl)
         
-        # --- 5. Stok (Mini bilgi) ---
+        # --- 5. Stok ---
         if not is_mini:
             stock_color = "#ff453a" if stock <= 5 else "#888"
             lbl_stock = QLabel(f"Stok: {stock}")
@@ -1622,9 +1623,16 @@ class ProductCard(QFrame):
             layout.addWidget(lbl_stock)
 
     def mousePressEvent(self, e):
+        # Tek tıklama (Sepete Ekle)
         child = self.childAt(e.position().toPoint())
         if child == self.btn_menu: return
-        if e.button() == Qt.LeftButton: self.cb(self.name_val, self.price_val)
+        if e.button() == Qt.LeftButton: 
+            self.cb(self.name_val, self.price_val)
+
+    def mouseDoubleClickEvent(self, e):
+        # Çift Tıklama (Düzenle)
+        if e.button() == Qt.LeftButton and self.double_click_cb:
+            self.double_click_cb(self.name_val)
 
     def show_options_menu(self):
         menu = QMenu(self)
@@ -1638,7 +1646,7 @@ class ProductCard(QFrame):
         
         menu.exec(QCursor.pos())
 
-    # --- İşlevler (Eski koddan aynen alındı, veritabanı bağlantısı için) ---
+    # --- İşlevler ---
     def toggle_fav(self):
         self.db.toggle_favorite(self.pid, 0 if self.fav else 1)
         if self.update_cb: self.update_cb()
@@ -1657,6 +1665,20 @@ class ProductCard(QFrame):
         if ok:
             self.db.update_product_field(self.pid, "stock", val)
             if self.update_cb: self.update_cb()
+    def change_critical(self):
+        val, ok = QInputDialog.getInt(self, "Kritik Stok", "Uyarı Limiti:", 5, 0, 1000, 1)
+        if ok:
+            self.db.update_product_field(self.pid, "critical_stock", val)
+            if self.update_cb: self.update_cb()
+    def change_cost(self):
+        curr = self.db.get_cost(self.name_val)
+        val, ok = QInputDialog.getDouble(self, "Maliyet", "Yeni Maliyet:", curr, 0, 100000, 2)
+        if ok:
+            self.db.update_product_field(self.pid, "cost_price", val)
+            if self.update_cb: self.update_cb()
+    def move_to_category(self, cat):
+        self.db.update_product_field(self.pid, "category", cat)
+        self.update_cb()
 
 
 class MergedNumpad(QWidget):
@@ -2964,13 +2986,18 @@ class AIWorker(QThread):
             self.finished.emit([])
         print("--- AI Worker Bitti ---")
             
-class NexusPOS(QMainWindow):
+class VoidPOS(QMainWindow):
     def __init__(self):
         super().__init__()
         self.denominations = [200, 100, 50, 20, 10, 5, 1, 0.50, 0.25]
         self.db = DatabaseManager()
         self.pos_driver = IngenicoRealDriver()
         self.installEventFilter(self)
+        self.search_timer = QTimer()
+        self.search_timer.setSingleShot(True)
+        self.search_timer.interval = 300 # 300 milisaniye bekleme süresi
+        self.search_timer.timeout.connect(self.execute_search)
+        self.current_category = "Tüm Ürünler" # Varsayılan kategori
         self.cart_data = []
         try:
             urun_sayisi = self.db.cursor.execute("SELECT Count(*) FROM products").fetchone()[0]
@@ -3128,6 +3155,14 @@ class NexusPOS(QMainWindow):
         
         self.load_categories_grid()
 
+    def open_product_detail_popup(self, product_name):
+        """Ürün detay/düzenleme penceresini açar"""
+        dlg = ProductDetailDialog(self.db, product_name, self)
+        if dlg.exec():
+            # Eğer değişiklik yapıldıysa ve şu an o kategorideysek ekranı yenile
+            if self.current_category != "Tüm Ürünler":
+                self.load_products_grid(self.current_category)
+
     def eventFilter(self, source, event):
         if event.type() == QEvent.KeyPress:
             if not isinstance(QApplication.focusWidget(), QLineEdit):
@@ -3222,12 +3257,6 @@ class NexusPOS(QMainWindow):
         # Ürün adını 0. sütundan al
         item_name = table.item(row, 0).text()
         
-        # Detay penceresini aç
-        # Not: self.db nesnesine ana pencereden erişmemiz lazım.
-        # Eğer CustomerCartTab içinde self.db yoksa, parent'tan alacağız.
-        # Basitlik için bu sınıfın 'nexus_pos' (Ana Pencere) referansına ihtiyacı var.
-        # Ancak db manager'ı bulmaya çalışalım:
-        
         db_ref = None
         # En basit yöntem: parent window'u bulup db'sini almak
         parent = self.window()
@@ -3242,7 +3271,18 @@ class NexusPOS(QMainWindow):
                 pass
         else:
             QMessageBox.warning(self, "Hata", "Veritabanı bağlantısı bulunamadı.")
-    
+
+    def open_product_detail_popup(self, product_name):
+        """Ürün detay/düzenleme penceresini açar"""
+        dlg = ProductDetailDialog(self.db, product_name, self)
+        if dlg.exec():
+            # Eğer değişiklik yapıldıysa ve şu an o kategorideysek ekranı yenile
+            if self.current_category != "Tüm Ürünler":
+                self.load_products_grid(self.current_category)
+            else:
+                # Tüm ürünlerdeysek veya arama sonucundaysak search'ü tetikle veya kategorileri yükle
+                pass
+
     def create_change_list_panel(self):
         """Sağ paneldeki liste şeklindeki para üstü alanını oluşturur"""
         frame = QFrame()
@@ -3350,7 +3390,16 @@ class NexusPOS(QMainWindow):
                 widget.deleteLater()
 
     def load_products_grid(self, category_name):
-        # 1. Animasyon donmalarını engellemek için güncellemeyi durdur
+        # 1. Kategori Takibini Güncelle
+        self.current_category = category_name 
+        
+        # Arama placeholder'ını duruma göre ayarla
+        if category_name == "Tüm Ürünler":
+            self.search_bar.setPlaceholderText("🔍 Kategori Ara...")
+        else:
+            self.search_bar.setPlaceholderText(f"🔍 {category_name} içinde ürün ara...")
+
+        # 2. Güncellemeyi durdur (Performans)
         self.selection_scroll.setUpdatesEnabled(False) 
         
         self.clear_selection_area()
@@ -3368,45 +3417,63 @@ class NexusPOS(QMainWindow):
         btn_back.clicked.connect(self.load_categories_grid)
         self.selection_lay.addWidget(btn_back, 0, 0, 1, 4) 
         
-        # Ürünleri Çek
-        products = self.db.get_products(category_name)
-        
+        # --- ÜRÜN ÇEKME (LIMIT EKLENDİ - DONMAYI ÖNLER) ---
+        products = []
+        if category_name == "Tüm Ürünler":
+             # Sadece son eklenen 60 ürünü göster
+            query = "SELECT id, name, sell_price, image_path, is_favorite, stock FROM products ORDER BY id DESC LIMIT 60"
+            products = self.db.cursor.execute(query).fetchall()
+            
+            lbl_limit = QLabel("⚡ Hız için son 60 ürün gösteriliyor. Aradığınızı bulamadıysanız arama yapın.")
+            lbl_limit.setStyleSheet("color: #888; font-size:12px; margin: 5px;")
+            self.selection_lay.addWidget(lbl_limit, 1, 0, 1, 4)
+            row_offset = 2
+        else:
+            products = self.db.get_products(category_name)
+            row_offset = 1
+
         if not products:
             lbl = QLabel("Bu kategoride ürün yok.")
             lbl.setStyleSheet("color: #666; margin-top: 20px; font-size: 14px;")
             self.selection_lay.addWidget(lbl, 1, 0, 1, 4)
         else:
             col = 0
-            row = 1 
+            row = row_offset
             max_col = 3
             
             for pid, name, price, img, fav, stock in products:
+                # Tek Tık Fonksiyonu
                 def on_click(n, p):
                     self.add_to_cart(n, p)
                 
-                # Yeni ProductCard sınıfını kullanıyoruz
-                card = ProductCard(pid, name, price, img, fav, stock, on_click, lambda: self.load_products_grid(category_name), self.db, is_mini=True)
+                # Çift Tık Fonksiyonu (Döngü içinde tanımlanmalı ki 'name' değerini doğru alsın)
+                def on_double_click(prod_name):
+                    self.open_product_detail_popup(prod_name)
+
+                # ProductCard Oluşturma
+                card = ProductCard(
+                    pid, name, price, img, fav, stock, 
+                    on_click, 
+                    lambda: self.load_products_grid(category_name), 
+                    self.db, 
+                    is_mini=True,
+                    double_click_cb=on_double_click # Artık hata vermez
+                )
                 
                 self.selection_lay.addWidget(card, row, col)
-                
                 col += 1
                 if col >= max_col:
                     col = 0
                     row += 1
 
-        # 2. KRİTİK NOKTA: Scroll'u en yukarı al
-        # ProcessEvents, arayüzün çizilmesini bekler, sonra yukarı atar.
         QApplication.processEvents() 
         self.selection_scroll.verticalScrollBar().setValue(0)
-        
-        # 3. Güncellemeyi geri aç (Kullanıcıya akıcı şekilde göster)
         self.selection_scroll.setUpdatesEnabled(True)
 
     def load_categories_grid(self):
-        self.clear_selection_area()
+        self.current_category = "Tüm Ürünler"
         self.search_bar.setPlaceholderText("🔍 Tüm ürünlerde ara...")
-        
-        # Layout Ayarları
+        self.clear_selection_area()
         self.selection_lay.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         
         # --- 1. KATEGORİ BAŞLIĞI ---
@@ -3510,46 +3577,119 @@ class NexusPOS(QMainWindow):
         self.selection_lay.addWidget(spacer, 5, 0)
 
     def on_search_changed(self, text):
-        """Arama kutusu değiştiğinde çalışır"""
-        text = text.strip()
+        """Arama kutusuna yazı yazıldığında çalışır (Gecikmeli)"""
+        # Her harfe basıldığında zamanlayıcıyı sıfırla
+        # Bu sayede kullanıcı yazarken arama yapmaz, durunca yapar.
+        if hasattr(self, 'search_timer'):
+            self.search_timer.stop()
+            self.search_timer.start(300) # 300ms sonra execute_search çalışacak
+
+    def execute_search(self):
+        """
+        Bağlam Duyarlı Arama:
+        - Ana ekrandaysan (Tüm Ürünler) -> KATEGORİ ara
+        - Kategori içindeysen -> O kategorideki ÜRÜNLERİ ara
+        """
+        text = self.search_bar.text().strip()
+        
+        # 1. Arama kutusu boşsa varsayılan görünüme dön
         if not text:
-            self.load_categories_grid()
+            if self.current_category == "Tüm Ürünler":
+                self.load_categories_grid()
+            else:
+                self.load_products_grid(self.current_category)
             return
             
         self.clear_selection_area()
+        self.selection_lay.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         
-        # Veritabanında arama (İsim veya Barkod)
-        # Not: SQL Injection için ? parametresi kullanın, ancak LIKE için % dışarıda eklenmeli.
-        query = """
-            SELECT id, name, sell_price, image_path, is_favorite, stock 
-            FROM products 
-            WHERE name LIKE ? OR barcode LIKE ?
-        """
-        search_term = f"%{text}%"
-        results = self.db.cursor.execute(query, (search_term, search_term)).fetchall()
+        # ============================================================
+        # SENARYO 1: ANA EKRANDAYIZ -> KATEGORİ ARAMASI YAP
+        # ============================================================
+        if self.current_category == "Tüm Ürünler":
+            # Kategoriler tablosunda ara
+            query = "SELECT name FROM categories WHERE name LIKE ? AND name != 'Tüm Ürünler'"
+            params = [f"%{text}%"]
+            results = self.db.cursor.execute(query, params).fetchall()
+            
+            if not results:
+                self.selection_lay.addWidget(QLabel("Kategori bulunamadı.", styleSheet="color:#666; font-size:16px; margin:20px;"), 0, 0)
+                return
+                
+            col = 0
+            row = 0
+            max_col = 3
+            
+            for cat_tuple in results:
+                cat_name = cat_tuple[0]
+                
+                # Kategori kartı oluştur
+                card = CategoryCard(
+                    cat_name, 
+                    self.load_products_grid, # Tıklanınca ürünleri yükle
+                    is_add_button=False, 
+                    db_manager=self.db, 
+                    refresh_cb=self.refresh_ui
+                )
+                self.selection_lay.addWidget(card, row, col)
+                
+                col += 1
+                if col >= max_col:
+                    col = 0
+                    row += 1
+
+        # ============================================================
+        # SENARYO 2: KATEGORİ İÇİNDEYİZ -> ÜRÜN ARAMASI YAP
+        # ============================================================
+        else:
+            # Sadece mevcut kategorideki ürünleri ara + LIMIT 60 (Donmayı Önler)
+            query = """
+                SELECT id, name, sell_price, image_path, is_favorite, stock 
+                FROM products 
+                WHERE category = ? AND (name LIKE ? OR barcode LIKE ?)
+                LIMIT 60
+            """
+            params = [self.current_category, f"%{text}%", f"%{text}%"]
+            
+            results = self.db.cursor.execute(query, params).fetchall()
+            
+            if not results:
+                self.selection_lay.addWidget(QLabel(f"'{self.current_category}' içinde sonuç yok.", styleSheet="color:#666; font-size:16px; margin:20px;"), 0, 0)
+                return
+                
+            col = 0
+            row = 0
+            max_col = 3
+            
+            for pid, name, price, img, fav, stock in results:
+                def on_click(n, p):
+                    self.add_to_cart(n, p)
+                
+                # Çift tıklama fonksiyonu
+                def on_double_click(prod_name):
+                    self.open_product_detail_popup(prod_name)
+
+                card = ProductCard(
+                    pid, name, price, img, fav, stock, 
+                    on_click, 
+                    lambda: self.execute_search(), 
+                    self.db, 
+                    is_mini=True,
+                    double_click_cb=on_double_click
+                )
+                card.setFixedSize(165, 180)
+                
+                self.selection_lay.addWidget(card, row, col)
+                col += 1
+                if col >= max_col:
+                    col = 0
+                    row += 1
         
-        if not results:
-            self.selection_lay.addWidget(QLabel("Sonuç bulunamadı...", styleSheet="color:#666;"), 0, 0)
-            return
-            
-        col = 0
-        row = 0
-        max_col = 3
-        
-        for pid, name, price, img, fav, stock in results:
-            def on_click(n, p):
-                self.add_to_cart(n, p)
-                self.search_bar.clear() # Ürün seçince aramayı temizle (isteğe bağlı)
-                self.search_bar.clearFocus()
-            
-            card = ProductCard(pid, name, price, img, fav, stock, on_click, lambda: self.on_search_changed(text), self.db, is_mini=True)
-            card.setFixedSize(140, 160)
-            
-            self.selection_lay.addWidget(card, row, col)
-            col += 1
-            if col >= max_col:
-                col = 0
-                row += 1
+        # Alttan itmek için spacer
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Expanding)
+        self.selection_lay.addWidget(spacer, row + 1, 0)
+        self.selection_lay.setRowStretch(row + 1, 1)
 
     def toggle_ciro_visibility(self):
         self.ciro_visible = not self.ciro_visible
@@ -3834,9 +3974,7 @@ class NexusPOS(QMainWindow):
                 new_val = int(s_val[:-1])
             else:
                 new_val = 1
-            
-            # Güncelleme işlemini manuel yapıyoruz çünkü update_row_qty fonksiyonu NexusPOS içinde yok
-            # ya da cart objesi QTableWidget olduğu için o metoda sahip değil.
+    
             cart.blockSignals(True)
             cart.item(row, 2).setText(str(new_val))
             cart.blockSignals(False)
@@ -4000,7 +4138,6 @@ class NexusPOS(QMainWindow):
        else:
            QMessageBox.warning(self, "Bulunamadı", f"Barkod kayıtlı değil: {barcode}")
 
-    # Bu fonksiyon NexusPOS sınıfının İÇİNDE olmalı
     def ai_otomatik_kontrol(self):
         """Arka planda AI kontrolünü başlatır"""
         print("AI Kontrol Tetiklendi...") # Debug çıktısı
@@ -4012,23 +4149,15 @@ class NexusPOS(QMainWindow):
         if hasattr(self, 'ai_worker') and self.ai_worker.isRunning():
             print("AI zaten çalışıyor, bu turu atla.")
             return
-
-        # İşçiyi (Thread) hazırla
         self.ai_worker = AIWorker(csv_yolu)
-        
-        # İş bittiğinde 'ai_sonucunu_isles' fonksiyonuna git
         self.ai_worker.finished.connect(self.ai_sonucunu_isles)
-        
-        # Başlat (Bu işlem arayüzü dondurmaz)
         self.ai_worker.start()
 
-    # Bu fonksiyon da NexusPOS sınıfının İÇİNDE olmalı
     def ai_sonucunu_isles(self, sonuclar):
         """Arka plandan gelen sonuçları ekrana basar"""
         print(f"AI Sonuçları Geldi: {len(sonuclar)} öneri") # Debug çıktısı
         
         if sonuclar:
-            # --- DURUM: UYARI VAR (KIRMIZI) ---
             self.ai_btn.setText(f"AI: {len(sonuclar)} ÖNERİ VAR!")
             self.ai_btn.setStyleSheet("""
                 QPushButton {
@@ -4044,7 +4173,6 @@ class NexusPOS(QMainWindow):
                 QPushButton:hover { background-color: #c0392b; }
             """)
         else:
-            # --- DURUM: STABİL (NORMAL) ---
             self.ai_btn.setText("AI: Sistem Stabil")
             self.ai_btn.setStyleSheet("""
                 QPushButton { 
@@ -4418,10 +4546,15 @@ class AdminDialog(QDialog):
                 if success:
                     QMessageBox.information(self, "Başarılı", msg)
                     
-                    # --- EKRANI TAMAMEN YENİLE ---
-                    self.load_categories_grid()  # Sol paneldeki kategori butonlarını yeniler
+                    # 1. Admin Panelindeki listeyi yenile (Kendi fonksiyonu)
                     if hasattr(self, 'load_table_data'):
-                        self.load_table_data()   # Admin panelindeki listeyi yeniler
+                        self.load_table_data()   
+
+                    # 2. Ana Ekrandaki (Parent) kategorileri yenile (DÜZELTİLEN KISIM)
+                    # self.parent() -> VoidPOS penceresini temsil eder
+                    if self.parent() and hasattr(self.parent(), 'load_categories_grid'):
+                        self.parent().load_categories_grid()
+                        
                 else:
                     QMessageBox.critical(self, "Hata", msg)
 
@@ -5470,6 +5603,6 @@ if __name__ == "__main__":
     
     app.setStyleSheet(theme_manager.get_stylesheet()) 
 
-    window = NexusPOS()
+    window = VoidPOS()
     window.show()
     sys.exit(app.exec())
