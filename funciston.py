@@ -4086,7 +4086,7 @@ class AdminDialog(QDialog):
 
         # 3. Sekmeleri Oluştur (Sırasıyla)
         # Index 0: AI
-        self.setup_ai_center()            
+        self.setup_native_ai_tab()        
         # Index 1: Finansal Rapor
         self.setup_finances()             
         # Index 2: Satış Geçmişi
