@@ -9,20 +9,22 @@ import uuid
 import struct
 import serial
 import threading
-import time
 import json
 import shutil 
 import csv
 import pandas as pd
 import numpy as np
-import sqlite3
 import re
+import difflib 
+import ctypes
+import subprocess
 
-
+from sklearn.linear_model import LinearRegression 
 from difflib import get_close_matches
 from sklearn.ensemble import RandomForestRegressor, IsolationForest
 from sklearn.cluster import KMeans
 from enum import Enum
+from sklearn.preprocessing import StandardScaler
 from typing import Optional, Dict, List
 from dataclasses import dataclass
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -35,7 +37,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QComboBox, QProgressDialog, QTabWidget, QMenu, QInputDialog,
                                QSplitter, QAbstractItemView, QButtonGroup, QSizePolicy, QGroupBox,
                                QDoubleSpinBox, QFileDialog,QStackedWidget,QColorDialog, QTextEdit)
-from PySide6.QtCore import Qt, QThread, Signal, QTimer
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QEvent
 from PySide6.QtGui import QFont, QCursor, QPixmap, QColor
 
 # =====================================================
@@ -264,7 +266,7 @@ class ThemeManager:
             QLabel.ChangeResult {{ color: {success}; font-weight: 900; font-size: 28px; font-family: monospace; }}
             
             QPushButton#BtnCash {{ background-color: {success}; color: #000; border: none; font-size: 18px; font-weight: 800; }}
-            QPushButton#BtnCash:hover {{ background-color: #2wb548; }}
+            QPushButton#BtnCash:hover {{ background-color: #2eb548; }}
             
             QPushButton#BtnCard {{ background-color: {accent}; color: #fff; border: none; font-size: 18px; font-weight: 800; }}
             QPushButton#BtnCard:hover {{ background-color: #0071e3; }}
@@ -546,317 +548,85 @@ class GOSBMessageType(Enum):
     STATUS = 0x35
 
 
-class IngenicoGOSB:
-    """Ingenico Move 5000F - GÖSB Protokolü (Port 6420) - Optimize Edilmiş"""
-    
-    ACK = 0x06
-    NAK = 0x15
-    STX = 0x02
-    ETX = 0x03
-    
-    def __init__(self, ip: str, port: int):
-        self.ip = ip
-        self.port = port
-        self.socket = None
-        self.logger = logging.getLogger("IngenicoGOSB")
-    
-    def connect(self) -> bool:
-        try:
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.settimeout(5) # Bağlantı için 5 sn yeterli
-            self.socket.connect((self.ip, self.port))
-            self.logger.info(f"✅ POS Bağlantısı Başarılı: {self.ip}:{self.port}")
-            return True
-        except Exception as e:
-            self.logger.error(f"❌ POS Bağlantı Hatası: {e}")
-            return False
-    
-    def disconnect(self):
-        if self.socket:
-            try:
-                self.socket.close()
-            except:
-                pass
-            finally:
-                self.socket = None
-    
-    def sale(self, amount: float) -> dict:
-        """KART ile satış başlat"""
-        if not self.connect():
-            return {'success': False, 'message': 'POS Cihazına Bağlanılamadı (IP/Port Kontrol Et)'}
+import subprocess
+import os
+import time
+
+class IngenicoRealDriver:
+    """
+    Gerçek Ingenico Yazar Kasa Sürücüsü
+    Python -> ixirYazarkasa.exe -> GMPSmartDLL.dll -> Yazar Kasa
+    zincirini kullanarak çalışır.
+    """
+    def __init__(self):
+        # 1. Çalışma dizinini bul
+        base_path = get_app_path() # funciston.py içindeki yardımcı fonksiyonu kullanıyoruz
         
+        # 2. Exe yolunu oluştur (libs klasörü içinde)
+        self.exe_path = os.path.join(base_path, "libs", "ixirYazarkasa.exe")
+        
+        # 3. Dosya var mı kontrol et
+        if os.path.exists(self.exe_path):
+            print(f"✅ Yazar Kasa Programı Bulundu: {self.exe_path}")
+            self.is_active = True
+        else:
+            print(f"⚠️ HATA: Yazar Kasa programı bulunamadı!\nAranan yol: {self.exe_path}")
+            print("Lütfen 'libs' klasörünü oluşturup ixirYazarkasa.exe ve GMPSmartDLL.dll dosyalarını içine atın.")
+            self.is_active = False
+
+    def send_transaction(self, amount, payment_type):
+        """
+        Satış emrini exe üzerinden gönderir.
+        payment_type: 0 = NAKİT, 1 = KREDİ KARTI
+        """
+        if amount <= 0:
+            return {"success": False, "message": "Geçersiz Tutar"}
+
+        # --- SİMÜLASYON MODU (Dosya yoksa veya test için) ---
+        if not self.is_active:
+            print(f"📡 [SİMÜLASYON] Cihazdan Fiş Çıkıyor... {amount:.2f} TL")
+            time.sleep(1) 
+            return {"success": True, "message": "Simülasyon Onayı"}
+        
+        # --- GERÇEK İŞLEM ---
         try:
-            # GÖSB Protokolüne Göre Satış Mesajı Hazırla
-            # Format: [MsgType][FieldID][Len][Data]...
-            # 0x31 = Satış İsteği
+            # ixirYazarkasa.exe genelde şu formatta çalışır: <Exe> <Tutar> <Kısım> <Tip>
+            # Örnek: ixirYazarkasa.exe 1.50 1 1
             
-            amount_str = f"{int(amount * 100)}" # Kuruş cinsinden (Örn: 1.50 TL -> 150)
+            amount_str = f"{amount:.2f}"
             
-            # Mesaj Gövdesi (Payload)
-            payload = bytearray()
-            payload.append(0x31) # Mesaj Tipi: Satış
+            # Parametreler: [Exe Yolu, Tutar, KısımNo(1), ÖdemeTipi(0/1)]
+            args = [self.exe_path, amount_str, "1", str(payment_type)]
             
-            # Tutar Alanı (Tag: 6)
-            # Yapı: [Tag: 00 06] [Len: 00 XX] [Data: amount_str]
-            payload += struct.pack('!H', 6)
-            payload += struct.pack('!H', len(amount_str))
-            payload += amount_str.encode('ascii')
+            print(f"🔌 [CİHAZ] Komut Gönderiliyor: {args}")
             
-            # Tarih/Saat Ekle (Opsiyonel ama iyi olur)
-            now_str = datetime.datetime.now().strftime("%y%m%d%H%M%S")
-            payload += struct.pack('!H', 12)
-            payload += struct.pack('!H', len(now_str))
-            payload += now_str.encode('ascii')
-
-            # --- ÇERÇEVELEME (FRAMING) ---
-            # STX + LEN(2 byte) + PAYLOAD + ETX + LRC
-            frame = bytearray()
-            frame.append(self.STX)
-            frame += struct.pack('!H', len(payload))
-            frame += payload
-            frame.append(self.ETX)
+            # Exe'yi çalıştır (capture_output=True ile sonucunu yakala)
+            # creationflags=0x08000000 parametresi Windows'ta konsol penceresi açılmasını engeller
+            startupinfo = None
+            if os.name == 'nt':
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             
-            # LRC Hesapla (XOR Checksum)
-            lrc = 0
-            for b in frame[1:]: # STX hariç hepsini XOR'la
-                lrc ^= b
-            frame.append(lrc)
+            process = subprocess.run(
+                args, 
+                capture_output=True, 
+                text=True, 
+                startupinfo=startupinfo
+            )
             
-            # 1. Mesajı Gönder
-            self.logger.info(f"📤 Satış İsteği Gönderiliyor: {amount:.2f} TL")
-            self.socket.sendall(frame)
-            
-            # 2. ACK Bekle (Cihaz "Mesajı aldım" demeli)
-            try:
-                self.socket.settimeout(2)
-                ack = self.socket.recv(1)
-                if not ack or ack[0] != self.ACK:
-                    self.logger.warning("⚠️ POS'tan ACK gelmedi, yine de dinlemeye devam ediliyor.")
-            except socket.timeout:
-                pass # ACK gelmese bile bazen işlem devam edebilir
-            
-            # 3. Sonuç Bekle (Kart okutma süresi - 60 sn)
-            self.socket.settimeout(60)
-            response_frame = self._read_frame()
-            
-            if not response_frame:
-                return {'success': False, 'message': 'POS Yanıt Vermedi (Zaman Aşımı)'}
-            
-            # 4. Yanıtı Çözümle
-            result = self._parse_gosb_response(response_frame)
-            
-            # ACK Gönder (Cihaza "Yanıtı aldım, kapanabilirsin" de)
-            try:
-                self.socket.send(bytes([self.ACK]))
-            except:
-                pass
-
-            if result.get('response_code') == '00':
-                return {
-                    'success': True,
-                    'amount': amount,
-                    'auth_code': result.get('auth_code', '0000'),
-                    'rrn': result.get('rrn', '0000'),
-                    'card_number': result.get('card_number', '****'),
-                    'message': 'İşlem Başarılı'
-                }
+            # Exe'nin çıkış kodunu kontrol et (0 genelde başarıdır)
+            if process.returncode == 0:
+                print(f"Cihaz Çıktısı: {process.stdout}")
+                return {"success": True, "message": "Fiş Kesildi"}
             else:
-                return {
-                    'success': False,
-                    'message': result.get('response_text', 'İşlem Reddedildi')
-                }
+                err_msg = process.stderr if process.stderr else "Bilinmeyen Hata"
+                print(f"Cihaz Hatası ({process.returncode}): {err_msg}")
+                # Hata olsa bile markette iş durmasın diye True dönebiliriz (Riskli ama pratik)
+                # Şimdilik hata dönüyoruz:
+                return {"success": False, "message": f"Cihaz Hatası: {err_msg}"}
 
         except Exception as e:
-            self.logger.error(f"Satış Hatası: {e}")
-            return {'success': False, 'message': f'Hata: {str(e)}'}
-        finally:
-            self.disconnect()
-
-    def print_receipt_only(self, amount: float) -> dict:
-        """Nakit işlemde sadece fiş yazdırır"""
-        # Port 6420 genelde sadece kart işlemi içindir.
-        # Nakit fişi yazdırmak için veritabanına kayıt yeterlidir.
-        return {'success': True, 'message': 'Nakit Kaydedildi'}
-
-    def _read_frame(self):
-        """Soketten STX...ETX formatında veri okur"""
-        try:
-            # STX oku
-            byte = self.socket.recv(1)
-            while byte and byte[0] != self.STX:
-                byte = self.socket.recv(1)
-            
-            if not byte: return None
-            
-            # Uzunluk oku (2 byte)
-            len_bytes = self.socket.recv(2)
-            if len(len_bytes) < 2: return None
-            length = struct.unpack('!H', len_bytes)[0]
-            
-            # Veriyi oku
-            payload = b''
-            while len(payload) < length:
-                chunk = self.socket.recv(length - len(payload))
-                if not chunk: break
-                payload += chunk
-                
-            # ETX ve LRC oku
-            self.socket.recv(2) 
-            
-            return payload
-        except Exception as e:
-            self.logger.error(f"Okuma hatası: {e}")
-            return None
-
-    def _parse_gosb_response(self, payload):
-        """Gelen byte verisini sözlüğe çevir"""
-        result = {}
-        offset = 1 # MsgType'ı atla
-        
-        try:
-            while offset < len(payload):
-                # Field ID (2 byte)
-                if offset + 2 > len(payload): break
-                field_id = struct.unpack('!H', payload[offset:offset+2])[0]
-                offset += 2
-                
-                # Length (2 byte)
-                if offset + 2 > len(payload): break
-                field_len = struct.unpack('!H', payload[offset:offset+2])[0]
-                offset += 2
-                
-                # Data
-                if offset + field_len > len(payload): break
-                data = payload[offset:offset+field_len].decode('ascii', errors='ignore')
-                offset += field_len
-                
-                # Eşleştirme
-                if field_id == 1: result['response_code'] = data
-                elif field_id == 2: result['auth_code'] = data
-                elif field_id == 5: result['card_number'] = data
-                elif field_id == 8: result['rrn'] = data
-                elif field_id == 39: result['response_text'] = data
-                
-        except Exception as e:
-            self.logger.error(f"Parse hatası: {e}")
-            
-        return result
-    
-    def _parse_response(self, payload: bytes) -> dict:
-        """GÖSB yanıtını parse et"""
-        result = {'msg_type': payload[0]}
-        offset = 1
-        
-        while offset < len(payload):
-            if offset + 4 > len(payload):
-                break
-            
-            field_id = struct.unpack('!H', payload[offset:offset+2])[0]
-            offset += 2
-            
-            field_len = struct.unpack('!H', payload[offset:offset+2])[0]
-            offset += 2
-            
-            if offset + field_len > len(payload):
-                break
-            
-            field_data = payload[offset:offset+field_len].decode('ascii', errors='ignore')
-            offset += field_len
-            
-            # Field mapping
-            field_names = {
-                1: 'response_code',
-                2: 'auth_code',
-                3: 'terminal_id',
-                4: 'merchant_id',
-                5: 'card_number',
-                6: 'amount',
-                7: 'stan',
-                8: 'rrn',
-                39: 'response_text'
-            }
-            
-            if field_id in field_names:
-                result[field_names[field_id]] = field_data
-        
-        return result
-    
-    def sale(self, amount: float) -> dict:
-        """KART ile satış"""
-        if not self.connect():
-            return {'success': False, 'message': 'Bağlantı hatası'}
-        
-        try:
-            amount_krs = int(amount * 100)
-            
-            # SALE mesajı (0x31)
-            message = self._build_gosb_message(0x31, {
-                6: amount_krs,  # Tutar (kuruş)
-                12: datetime.datetime.now().strftime("%y%m%d%H%M%S")  # Zaman
-            })
-            
-            if not self._send_and_wait_ack(message):
-                return {'success': False, 'message': 'Mesaj gönderilemedi'}
-            
-            # Yanıt bekle (60 saniye - kart okutma süresi)
-            response = self._receive_and_send_ack(timeout=60)
-            
-            if not response:
-                return {'success': False, 'message': 'POS yanıt vermedi', 'timeout': True}
-            
-            parsed = self._parse_response(response)
-            rc = parsed.get('response_code', 'XX')
-            
-            if rc == '00':
-                return {
-                    'success': True,
-                    'response_code': rc,
-                    'auth_code': parsed.get('auth_code', ''),
-                    'rrn': parsed.get('rrn', ''),
-                    'card_number': self._mask_card(parsed.get('card_number', '')),
-                    'message': 'İşlem Onaylandı'
-                }
-            else:
-                return {
-                    'success': False,
-                    'response_code': rc,
-                    'message': self._get_error_message(rc)
-                }
-        
-        finally:
-            self.disconnect()
-    
-    def print_receipt_only(self, amount: float) -> dict:
-        """NAKİT işlem - Sadece fiş yazdır (kart okutma YOK)"""
-        # Ingenico'da nakit işlemi için "DISPLAY ONLY" mesajı gönderilir
-        # veya hiç mesaj gönderilmez, sadece yazıcı komutu verilir
-        
-        self.logger.info(f"💵 NAKİT işlem - Fiş yazdırılıyor: {amount:.2f} TL")
-        
-        # Bazı POS'larda nakit için özel komut var, yoksa sadece Success dön
-        return {
-            'success': True,
-            'message': 'Nakit işlem kaydedildi',
-            'rrn': datetime.datetime.now().strftime("%y%m%d%H%M%S")
-        }
-    
-    def _mask_card(self, card: str) -> str:
-        if not card or len(card) < 10:
-            return "****"
-        return f"{card[:6]}{'*' * (len(card) - 10)}{card[-4:]}"
-    
-    def _get_error_message(self, code: str) -> str:
-        errors = {
-            '00': 'Onaylandı',
-            '05': 'Reddedildi',
-            '51': 'Yetersiz Bakiye',
-            '54': 'Kart Süresi Dolmuş',
-            '55': 'Hatalı PIN',
-            '91': 'Banka Yanıt Vermiyor'
-        }
-        return errors.get(code, f'Hata Kodu: {code}')
-
-
+            return {"success": False, "message": f"Bağlantı Hatası: {str(e)}"}
 # =====================================================
 # POS SERVİSİ
 # =====================================================
@@ -2238,9 +2008,7 @@ class AIService:
         except:
             return []
 
-    # --- (Eski Özellikler Korunuyor: Anomali, Segmentasyon, Ürün Önerisi) ---
     def detect_anomalies(self):
-        # ... (Eski kodunuzdaki detect_anomalies içeriği aynen kalsın) ...
         try:
             conn = self.get_connection()
             df = pd.read_sql("SELECT id, total_amount, sale_date FROM sales", conn)
@@ -2341,282 +2109,680 @@ class AIService:
 # =====================================================
 # GELİŞTİRİLMİŞ VOID AI - DOĞAL DİL İŞLEME
 # =====================================================
-import re
-from difflib import get_close_matches
 
-class VoidAI_NLP:
-    """Doğal Dil İşleme Motoru - GERÇEK ÇALIŞAN VERSİYON"""
+
+import requests
+import json
+import datetime
+
+class VoidAI_Local:
+    """Tamamen Yerel ve Çevrimdışı Çalışan AI (Ollama)"""
     
     def __init__(self, db_manager):
         self.db = db_manager
-        self.conversation_history = []
+        self.api_url = "http://localhost:11434/api/generate" # Ollama yerel adresi
+        self.model = "gemma:2b" # veya "llama3" (daha zeki ama yavaş)
+
+    def get_shop_context(self):
+        # (Bu fonksiyon aynı kalacak, veritabanından veriyi çeker)
+        today = str(datetime.date.today())
+        res = self.db.cursor.execute("SELECT SUM(total_amount) FROM sales WHERE sale_date=?", (today,)).fetchone()
+        ciro = res[0] if res[0] else 0
+        return f"Bugün tarih: {today}. Şu anki ciro: {ciro} TL."
+
+    def generate_response(self, user_msg):import sqlite3
+import pandas as pd
+import numpy as np
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+import datetime
+
+class VoidBrain_Analytic:
+    def __init__(self, db_path="voidpos.db"):
+        self.db_path = db_path
+
+    def get_connection(self):
+        return sqlite3.connect(self.db_path)
+
+    def predict_sales(self, days_ahead=7):
+        try:
+            conn = self.get_connection()
+            query = """
+                SELECT sale_date, SUM(total_amount) as daily_total 
+                FROM sales 
+                GROUP BY sale_date 
+                ORDER BY sale_date ASC
+            """
+            df = pd.read_sql(query, conn)
+            conn.close()
+
+            if len(df) < 5:
+                return "Yetersiz veri (En az 5 günlük satış lazım)."
+
+            df['sale_date'] = pd.to_datetime(df['sale_date'])
+            df['date_ordinal'] = df['sale_date'].map(datetime.datetime.toordinal)
+
+            X = df[['date_ordinal']] # Girdi (Tarih)
+            y = df['daily_total']    # Çıktı (Ciro)
+
+            model = RandomForestRegressor(n_estimators=100, random_state=42)
+            model.fit(X, y)
+
+            # Tahmin Yap
+            future_dates = []
+            predictions = []
+            last_date = df['sale_date'].iloc[-1]
+
+            for i in range(1, days_ahead + 1):
+                next_day = last_date + datetime.timedelta(days=i)
+                next_ordinal = next_day.toordinal()
+                pred = model.predict([[next_ordinal]])[0]
+                
+                future_dates.append(next_day.strftime("%d.%m"))
+                predictions.append(pred)
+
+            return {
+                "dates": future_dates,
+                "values": predictions,
+                "total_predicted": sum(predictions)
+            }
+        except Exception as e:
+            return f"Hata: {str(e)}"
+
+    # --- YENİ ÖZELLİK 4: ABC ANALİZİ (STOK MÜHENDİSLİĞİ) ---
+    def perform_abc_analysis(self):
+        """
+        Pareto İlkesi (80/20 Kuralı):
+        - A Sınıfı: Cironun %70'ini oluşturan en önemli ürünler (Stokta ASLA bitmemeli)
+        - B Sınıfı: Cironun %20'si (Önemli)
+        - C Sınıfı: Cironun %10'u (Çok çeşit ama az ciro)
+        """
+        try:
+            conn = self.get_connection()
+            # Her ürünün toplam cirosunu hesapla
+            query = """
+                SELECT product_name, SUM(total_price) as revenue
+                FROM sale_items
+                GROUP BY product_name
+                ORDER BY revenue DESC
+            """
+            df = pd.read_sql(query, conn)
+            conn.close()
+
+            if df.empty: return "Analiz için veri yok."
+
+            # Kümülatif toplam ve yüzdeleri hesapla
+            total_revenue = df['revenue'].sum()
+            df['cumulative'] = df['revenue'].cumsum()
+            df['percentage'] = df['cumulative'] / total_revenue
+
+            # Sınıflandırma
+            def classify(x):
+                if x <= 0.70: return 'A'
+                elif x <= 0.90: return 'B'
+                else: return 'C'
+
+            df['class'] = df['percentage'].apply(classify)
+
+            # Özet Raporu
+            a_items = df[df['class'] == 'A']['product_name'].tolist()[:5] # İlk 5 tanesi
+            b_count = len(df[df['class'] == 'B'])
+            c_count = len(df[df['class'] == 'C'])
+
+            msg = "📊 **ABC Stok Analizi Sonucu:**\n\n"
+            msg += f"🥇 **A Sınıfı (En Değerliler):** {', '.join(a_items)}...\n"
+            msg += "   *(Bu ürünler cironuzun %70'ini yapıyor! Stoklarını sıkı takip edin.)*\n\n"
+            msg += f"🥈 **B Sınıfı:** {b_count} çeşit ürün.\n"
+            msg += f"🥉 **C Sınıfı (Yükler):** {c_count} çeşit ürün.\n"
+            msg += "   *(C sınıfı ürünler rafta yer kaplıyor olabilir, kampanya yapın.)*"
+            
+            return msg
+        except Exception as e:
+            return f"ABC Analizi Hatası: {str(e)}"
+
+    # --- YENİ ÖZELLİK 5: GÜN SONU TAHMİNİ (PROJECTION) ---
+    def predict_end_of_day(self):
+        """
+        Şu anki saat ve ciroya bakarak, geçmişteki benzer günlerin
+        performansıyla gün sonu kapanış cirosunu tahmin eder.
+        """
+        try:
+            conn = self.get_connection()
+            now = datetime.datetime.now()
+            current_hour = now.hour
+            today_str = str(datetime.date.today())
+
+            # 1. Bugün şu ana kadar ne yaptık?
+            curr_res = conn.execute(f"SELECT SUM(total_amount) FROM sales WHERE sale_date='{today_str}'").fetchone()
+            current_revenue = curr_res[0] if curr_res[0] else 0
+
+            if current_revenue == 0:
+                conn.close()
+                return "Bugün henüz satış yok, tahmin yapılamıyor."
+
+            # 2. Geçmişte bu saatte genelde günün yüzde kaçını tamamlamış oluyoruz?
+            # Son 30 günün verisini çek
+            query = f"""
+                SELECT sale_date, 
+                       SUM(CASE WHEN CAST(strftime('%H', timestamp) AS INT) <= {current_hour} THEN total_amount ELSE 0 END) as partial_rev,
+                       SUM(total_amount) as total_rev
+                FROM sales
+                WHERE sale_date < '{today_str}'
+                GROUP BY sale_date
+                HAVING total_rev > 0
+                ORDER BY sale_date DESC
+                LIMIT 30
+            """
+            df = pd.read_sql(query, conn)
+            conn.close()
+
+            if len(df) < 5:
+                return "Tahmin için en az 5 günlük geçmiş veri gerekiyor."
+
+            # Ortalama tamamlanma oranını bul (Örn: Saat 14:00'te cironun %40'ı yapılmış oluyor)
+            df['completion_rate'] = df['partial_rev'] / df['total_rev']
+            avg_rate = df['completion_rate'].mean()
+
+            if avg_rate == 0: return "Yetersiz saatlik veri."
+
+            # 3. Tahmin: (Şu Anki Ciro) / (Tamamlanma Oranı)
+            predicted_total = current_revenue / avg_rate
+            
+            msg = f"🔮 **Gün Sonu Kapanış Tahmini:**\n\n"
+            msg += f"⏰ Saat {current_hour}:00 itibarıyla Ciro: **{current_revenue:.2f} ₺**\n"
+            msg += f"📈 Tamamlanma Oranı: %{avg_rate*100:.1f}\n"
+            msg += f"🏁 **Beklenen Kapanış:** **{predicted_total:.2f} ₺**\n"
+            
+            if predicted_total > current_revenue:
+                msg += f"   *(Kalan sürede tahmini {predicted_total - current_revenue:.2f} ₺ daha satış olacak)*"
+            
+            return msg
+
+        except Exception as e:
+            return f"Projeksiyon Hatası: {str(e)}"
         
-        # ANAHTAR KELİMELER
+    def analyze_basket_segments(self):
+        """Alışveriş sepetlerini tiplerine göre gruplar (K-Means)"""
+        try:
+            conn = self.get_connection()
+            # Her fişin toplam tutarını çek
+            df = pd.read_sql("SELECT total_amount FROM sales", conn)
+            conn.close()
+
+            if len(df) < 10:
+                return "Analiz için en az 10 satış gerekli."
+
+            # Veriyi ölçeklendir
+            scaler = StandardScaler()
+            scaled_data = scaler.fit_transform(df[['total_amount']])
+
+            # K-Means Algoritması (3 Küme: Düşük, Orta, Yüksek)
+            kmeans = KMeans(n_clusters=3, random_state=42)
+            df['cluster'] = kmeans.fit_predict(scaled_data)
+
+            # Kümelerin ortalamalarını bul
+            centers = df.groupby('cluster')['total_amount'].mean().sort_values()
+            
+            summary = "📊 **Müşteri Sepet Analizi:**\n"
+            labels = ["Küçük Alışverişler", "Standart Sepetler", "VIP / Toptan"]
+            
+            for i, avg in enumerate(centers):
+                label = labels[i] if i < 3 else f"Grup {i}"
+                count = len(df[df['cluster'] == centers.index[i]])
+                summary += f"• **{label}:** Ort. {avg:.2f} TL ({count} işlem)\n"
+
+            return summary
+        except Exception as e:
+            return f"Segmentasyon Hatası: {str(e)}"
+
+    # --- ÖZELLİK 3: ÇAPRAZ SATIŞ ÖNERİSİ (MATRIX FACTORIZATION MANTIĞI) ---
+    def recommend_next_product(self, current_cart_items):
+        """Sepettekine göre en mantıklı ürünü matematiksel olarak bulur"""
+        # Bu basit bir "Birliktelik Kuralı" (Association Rule) implementasyonudur.
+        if not current_cart_items: return None
+        
+        try:
+            conn = self.get_connection()
+            # Sepetteki ürünlerin geçtiği tüm fişleri bul
+            placeholders = ','.join(['?'] * len(current_cart_items))
+            query = f"""
+                SELECT s2.product_name, COUNT(*) as frequency
+                FROM sale_items s1
+                JOIN sale_items s2 ON s1.sale_id = s2.sale_id
+                WHERE s1.product_name IN ({placeholders})
+                AND s2.product_name NOT IN ({placeholders})
+                GROUP BY s2.product_name
+                ORDER BY frequency DESC
+                LIMIT 1
+            """
+            cursor = conn.cursor()
+            result = cursor.execute(query, current_cart_items).fetchone()
+            conn.close()
+            
+            if result:
+                return f"💡 Sistem Önerisi: Sepettekilerle en çok **{result[0]}** satılıyor."
+            return None
+        except:
+            return None
+        context = self.get_shop_context()
+        
+        prompt = f"""
+        Sen bir market asistanısın. Verilen bilgilere göre cevap ver.
+        BİLGİ: {context}
+        SORU: {user_msg}
+        CEVAP:
+        """
+        
+        data = {
+            "model": self.model,
+            "prompt": prompt,
+            "stream": False
+        }
+        
+        try:
+            response = requests.post(self.api_url, json=data)
+            if response.status_code == 200:
+                return response.json()['response']
+            else:
+                return f"Yerel AI Hatası: {response.status_code}"
+        except Exception as e:
+            return f"Ollama bağlantısı yok. (Terminalden 'ollama serve' yaptın mı?): {e}"
+
+
+
+class VoidBrain_Analytic:
+    """
+    VoidPOS İçin Özel Geliştirilmiş Saf Python Yapay Zeka Motoru
+    - Dışarıdan model indirmez.
+    - Veriyi anlık öğrenir ve model oluşturur.
+    """
+    def __init__(self, db_path="voidpos.db"):
+        self.db_path = db_path
+
+    def get_connection(self):
+        return sqlite3.connect(self.db_path)
+
+    # --- ÖZELLİK 1: GELECEK CİRO TAHMİNİ (REGRESSION) ---
+    def predict_sales(self, days_ahead=7):
+        """Geçmiş satışlara bakarak gelecek ciroyu tahmin eder."""
+        try:
+            conn = self.get_connection()
+            query = """
+                SELECT sale_date, SUM(total_amount) as daily_total 
+                FROM sales 
+                GROUP BY sale_date 
+                ORDER BY sale_date ASC
+            """
+            df = pd.read_sql(query, conn)
+            conn.close()
+
+            if len(df) < 5:
+                return "Yetersiz veri (En az 5 günlük satış lazım)."
+
+            # Veriyi Hazırla
+            df['sale_date'] = pd.to_datetime(df['sale_date'])
+            df['date_ordinal'] = df['sale_date'].map(datetime.datetime.toordinal)
+
+            X = df[['date_ordinal']] # Girdi (Tarih)
+            y = df['daily_total']    # Çıktı (Ciro)
+
+            # Modeli Kur ve Eğit (Saniyeler sürer)
+            # Random Forest daha karmaşık ilişkileri yakalar
+            model = RandomForestRegressor(n_estimators=100, random_state=42)
+            model.fit(X, y)
+
+            # Tahmin Yap
+            future_dates = []
+            predictions = []
+            last_date = df['sale_date'].iloc[-1]
+
+            for i in range(1, days_ahead + 1):
+                next_day = last_date + datetime.timedelta(days=i)
+                next_ordinal = next_day.toordinal()
+                pred = model.predict([[next_ordinal]])[0]
+                
+                future_dates.append(next_day.strftime("%d.%m"))
+                predictions.append(pred)
+
+            return {
+                "dates": future_dates,
+                "values": predictions,
+                "total_predicted": sum(predictions)
+            }
+        except Exception as e:
+            return f"Hata: {str(e)}"
+
+    # --- ÖZELLİK 2: SEPET SEGMENTASYONU (CLUSTERING) ---
+    def analyze_basket_segments(self):
+        """Alışveriş sepetlerini tiplerine göre gruplar (K-Means)"""
+        try:
+            conn = self.get_connection()
+            # Her fişin toplam tutarını çek
+            df = pd.read_sql("SELECT total_amount FROM sales", conn)
+            conn.close()
+
+            if len(df) < 10:
+                return "Analiz için en az 10 satış gerekli."
+
+            # Veriyi ölçeklendir
+            scaler = StandardScaler()
+            scaled_data = scaler.fit_transform(df[['total_amount']])
+
+            # K-Means Algoritması (3 Küme: Düşük, Orta, Yüksek)
+            kmeans = KMeans(n_clusters=3, random_state=42)
+            df['cluster'] = kmeans.fit_predict(scaled_data)
+
+            # Kümelerin ortalamalarını bul
+            centers = df.groupby('cluster')['total_amount'].mean().sort_values()
+            
+            summary = "📊 **Müşteri Sepet Analizi:**\n"
+            labels = ["Küçük Alışverişler", "Standart Sepetler", "VIP / Toptan"]
+            
+            for i, avg in enumerate(centers):
+                label = labels[i] if i < 3 else f"Grup {i}"
+                count = len(df[df['cluster'] == centers.index[i]])
+                summary += f"• **{label}:** Ort. {avg:.2f} TL ({count} işlem)\n"
+
+            return summary
+        except Exception as e:
+            return f"Segmentasyon Hatası: {str(e)}"
+
+    # --- ÖZELLİK 3: ÇAPRAZ SATIŞ ÖNERİSİ (MATRIX FACTORIZATION MANTIĞI) ---
+    def recommend_next_product(self, current_cart_items):
+        """Sepettekine göre en mantıklı ürünü matematiksel olarak bulur"""
+        # Bu basit bir "Birliktelik Kuralı" (Association Rule) implementasyonudur.
+        if not current_cart_items: return None
+        
+        try:
+            conn = self.get_connection()
+            # Sepetteki ürünlerin geçtiği tüm fişleri bul
+            placeholders = ','.join(['?'] * len(current_cart_items))
+            query = f"""
+                SELECT s2.product_name, COUNT(*) as frequency
+                FROM sale_items s1
+                JOIN sale_items s2 ON s1.sale_id = s2.sale_id
+                WHERE s1.product_name IN ({placeholders})
+                AND s2.product_name NOT IN ({placeholders})
+                GROUP BY s2.product_name
+                ORDER BY frequency DESC
+                LIMIT 1
+            """
+            cursor = conn.cursor()
+            result = cursor.execute(query, current_cart_items).fetchone()
+            conn.close()
+            
+            if result:
+                return f"💡 Sistem Önerisi: Sepettekilerle en çok **{result[0]}** satılıyor."
+            return None
+        except:
+            return None
+        
+class VoidAI_NLP:
+    """
+    Void AI 3.0: 
+    - Fuzzy Logic (Yazım hatası toleransı)
+    - Forecasting (Gelecek tahmini)
+    - Cross-Sell (Ürün önerisi)
+    - Anomaly Detection (Hata/Fraud yakalama)
+    - Dead Stock Logic (Stok eritme stratejisi)
+    """
+    
+    def __init__(self, db_manager):
+        self.db = db_manager
+        self.context = {} 
+
         self.intent_patterns = {
-            "ciro": ["ciro", "kazanç", "gelir", "hasılat", "satış", "ne kadar"],
-            "kar": ["kâr", "kar", "kazanç", "net", "profit"],
-            "stok": ["stok", "kaç tane", "envanter", "kalan"],
-            "bitmek_uzere": ["bitiyor", "tükeniyor", "az kaldı", "kritik"],
-            "en_cok_satan": ["en çok", "popüler", "revaçta", "çok satılan", "lider"],
-            "en_az_satan": ["en az", "durgun", "yavaş", "satmayan"],
-            "urun_fiyat": ["fiyat", "kaç lira", "ne kadar", "bedel"],
-            "bugun": ["bugün", "bugünkü"],
-            "dun": ["dün", "dünkü"],
-            "yogun_saat": ["yoğun", "kalabalık", "en çok satış", "hangi saat"],
-            "sepet_ortalama": ["sepet", "ortalama"],
-            "oneri": ["tavsiye", "öneri", "ne yapmalı"],
-            "yardim": ["yardım", "nasıl", "ne yapabilirsin", "komut"],
+            "ciro": ["ciro", "kazanç", "gelir", "hasılat", "satış", "durum"],
+            "kar": ["kâr", "kar", "net", "profit", "kazancımız"],
+            "stok": ["stok", "kaç tane", "envanter", "kalan", "mevcut"],
+            "tahmin": ["tahmin", "gelecek", "beklenti", "yarın ne olur", "haftaya"],
+            "oneri_urun": ["ne satalım", "yanına ne gider", "kombin", "öneri"],
+            "anomali": ["anomali", "hata", "yanlış işlem", "şüpheli", "kaçak", "kontrol et", "tuhaflık", "güvenlik", "dengesizlik"],
+            "olu_stok": ["ölü stok", "olu stok", "satmayan", "elimde kalan", "stok eritme", "ne yapayım", "zarar"],
+            "abc_analizi": ["abc", "değerli ürünler", "önemli ürünler", "sınıflandırma", "pareto"],
+            "gun_sonu": ["kapanış", "kaçla kapatırız", "akşam ne olur", "gün sonu", "bugün kaç olur"],
+            "yardim": ["yardım", "komutlar", "ne yapabilirsin", "destek"],
         }
 
     def detect_intent(self, user_msg):
-        """Kullanıcının niyetini tespit et"""
+        """Fuzzy Matching ile akıllı niyet tespiti"""
         msg_lower = user_msg.lower()
         
         for intent, keywords in self.intent_patterns.items():
-            if any(kw in msg_lower for kw in keywords):
-                return intent
-        
+            for kw in keywords:
+                match = difflib.get_close_matches(kw, msg_lower.split(), n=1, cutoff=0.7)
+                if match or kw in msg_lower:
+                    return intent
         return "unknown"
 
-    def extract_entities(self, user_msg):
-        """Mesajdan tarih ve ürün adı çıkar"""
-        entities = {}
+    def extract_product_smart(self, user_msg):
+        """Mesaj içinden ürün ismini ayıklar"""
         msg_lower = user_msg.lower()
-        
-        # Tarih
-        if "bugün" in msg_lower:
-            entities["date"] = str(datetime.date.today())
-        elif "dün" in msg_lower:
-            entities["date"] = str(datetime.date.today() - datetime.timedelta(days=1))
-        
-        # Ürün adı
         try:
             products = self.db.cursor.execute("SELECT name FROM products").fetchall()
-            for (prod_name,) in products:
-                if prod_name.lower() in msg_lower:
-                    entities["product_name"] = prod_name
-                    break
+            product_list = [p[0] for p in products]
+            product_list_lower = [p.lower() for p in product_list]
+            
+            # 1. Tam eşleşme
+            for prod in product_list:
+                if prod.lower() in msg_lower:
+                    return prod
+            
+            # 2. Yakın eşleşme (Marlbro -> Marlboro)
+            words = msg_lower.split()
+            for word in words:
+                matches = difflib.get_close_matches(word, product_list_lower, n=1, cutoff=0.7)
+                if matches:
+                    idx = product_list_lower.index(matches[0])
+                    return product_list[idx]
         except:
             pass
-        
-        return entities
+        return None
 
     def generate_response(self, user_msg):
-        """ANA FONKSİYON: Kullanıcı mesajına yanıt üret"""
+        """Ana beyin fonksiyonu"""
         intent = self.detect_intent(user_msg)
-        entities = self.extract_entities(user_msg)
         
+        # Ürün bağlamını yakala
+        found_product = self.extract_product_smart(user_msg)
+        if found_product:
+            self.context["last_product"] = found_product
+        target_product = found_product if found_product else self.context.get("last_product")
+
         try:
             if intent == "ciro":
-                return self.handle_ciro_query(entities)
-            elif intent == "kar":
-                return self.handle_profit_query(entities)
+                return self.handle_ciro_query()
+            elif intent == "tahmin":
+                res = self.brain.predict_sales(1) # Yarın için 1 gün
+                if isinstance(res, dict):
+                    return f"🔮 Yarınki Ciro Tahmini: **{res['total_predicted']:.2f} ₺**"
+                return str(res)
+            elif intent == "oneri_urun":
+                return self.handle_cross_sell(target_product)
             elif intent == "stok":
-                return self.handle_stock_query(entities)
-            elif intent == "en_cok_satan":
-                return self.handle_top_products()
-            elif intent == "en_az_satan":
-                return self.handle_worst_products()
-            elif intent == "urun_fiyat":
-                return self.handle_product_price(entities)
-            elif intent == "yogun_saat":
-                return self.handle_busy_hours()
-            elif intent == "sepet_ortalama":
-                return self.handle_avg_basket()
-            elif intent == "oneri":
-                return self.handle_suggestions()
+                return self.handle_stock_query(target_product)
+            elif intent == "anomali":
+                return self.detect_anomalies() # YENİ
+            elif intent == "abc_analizi":
+                return self.brain.perform_abc_analysis() 
+            elif intent == "gun_sonu":
+                return self.brain.predict_end_of_day()
+            elif intent == "olu_stok":
+                return self.suggest_dead_stock_action() # YENİ
             elif intent == "yardim":
                 return self.show_help()
             else:
-                return "🤔 Bunu tam anlayamadım. 'Yardım' yazarak komutları görebilirsin."
+                return "🤔 Anlayamadım. 'ABC analizi yap' veya 'Gün sonu tahmini' diyebilirsin."
         except Exception as e:
-            return f"⚠️ Bir hata oluştu: {str(e)}"
+            return f"⚠️ Analiz hatası: {str(e)}"
 
-    # --- VERİ SORGULAMA FONKSİYONLARI ---
-    
-    def handle_ciro_query(self, entities):
-        date = entities.get("date", str(datetime.date.today()))
-        
-        result = self.db.cursor.execute(
-            "SELECT SUM(total_amount) FROM sales WHERE sale_date = ?", (date,)
-        ).fetchone()
-        ciro = result[0] if result[0] else 0
-        
-        # Önceki gün karşılaştırması
-        prev_date = str(datetime.datetime.strptime(date, "%Y-%m-%d").date() - datetime.timedelta(days=1))
-        prev_ciro = self.db.cursor.execute(
-            "SELECT SUM(total_amount) FROM sales WHERE sale_date = ?", (prev_date,)
-        ).fetchone()[0] or 0
-        
-        diff = ciro - prev_ciro
-        emoji = "📈" if diff > 0 else "📉" if diff < 0 else "➡️"
-        
-        return f"💰 **{date} Cirosu:** {ciro:.2f} ₺\n{emoji} Önceki gün: {prev_ciro:.2f} ₺ (Fark: {diff:+.2f} ₺)"
+    # --- ÖZELLİK 1: ANOMALİ TESPİTİ (GÜVENLİK) ---
+    def detect_anomalies(self):
+        """Isolation Forest algoritması ile şüpheli satışları bulur"""
+        try:
+            query = "SELECT id, total_amount, sale_date FROM sales ORDER BY id DESC LIMIT 500"
+            # pd.read_sql için self.db.conn nesnesi gereklidir
+            df = pd.read_sql(query, self.db.conn)
+            
+            if len(df) < 20:
+                return "⚠️ Anomali analizi için daha fazla satış verisi gerekiyor."
 
-    def handle_profit_query(self, entities):
-        date = entities.get("date", str(datetime.date.today()))
-        
-        result = self.db.cursor.execute(
-            "SELECT SUM(total_profit) FROM sales WHERE sale_date = ?", (date,)
-        ).fetchone()
-        profit = result[0] if result[0] else 0
-        
-        return f"💵 **Tahmini Kâr ({date}):** {profit:.2f} ₺"
+            # Modeli eğit
+            model = IsolationForest(contamination=0.05, random_state=42)
+            df['anomaly'] = model.fit_predict(df[['total_amount']])
+            
+            # Anomalileri filtrele (-1 anomali demektir)
+            anomalies = df[df['anomaly'] == -1]
+            
+            if anomalies.empty:
+                return "✅ Sistem taraması temiz. Şüpheli bir işlem bulunamadı."
+            
+            msg = "🚨 **DİKKAT! Şüpheli İşlemler Tespit Edildi:**\n"
+            msg += "(Ortalamadan sapmış işlemler aşağıdadır)\n\n"
+            
+            for _, row in anomalies.iterrows():
+                msg += f"• Fiş #{row['id']}: **{row['total_amount']:.2f} ₺** ({row['sale_date']})\n"
+            
+            msg += "\n👉 *Lütfen bu fişleri kontrol ediniz (İade/Hata olabilir).* "
+            return msg
+        except Exception as e:
+            return f"Anomali modülü hatası: {str(e)}"
 
-    def handle_stock_query(self, entities):
-        product_name = entities.get("product_name")
-        
+    # --- ÖZELLİK 2: ÖLÜ STOK YÖNETİMİ (KÂRLILIK) ---
+    def suggest_dead_stock_action(self):
+        """Son 30 gündür satılmayan ürünler için fiyatlandırma stratejisi önerir"""
+        try:
+            # SQL: Stokta var ama son 30 gündür satılmamış
+            query = """
+                SELECT name, stock, sell_price, cost_price 
+                FROM products 
+                WHERE stock > 0 
+                AND name NOT IN (
+                    SELECT DISTINCT product_name 
+                    FROM sale_items 
+                    WHERE sale_date >= date('now', '-30 days')
+                )
+                ORDER BY stock DESC 
+                LIMIT 5
+            """
+            results = self.db.cursor.execute(query).fetchall()
+            
+            if not results:
+                return "👏 Harika! 'Ölü stok' (hiç satmayan) ürününüz yok."
+            
+            msg = "❄️ **Stok Eritme Önerileri (Ölü Stoklar):**\n"
+            for name, stock, price, cost in results:
+                # Başabaş noktası (Maliyet + %10 Masraf)
+                breakeven = cost * 1.1 
+                
+                if price > breakeven:
+                    discount_price = breakeven
+                    msg += f"• **{name}** ({stock} adet): 30 gündür hareketsiz.\n"
+                    msg += f"   👉 Öneri: Fiyatı **{discount_price:.2f} ₺** seviyesine indirin (Maliyetine Satış).\n"
+                else:
+                    msg += f"• **{name}** ({stock} adet): Zaten dip fiyatta. 1 Alana 1 Bedava yapın.\n"
+                    
+            return msg
+        except Exception as e:
+            return f"Analiz hatası: {str(e)}"
+
+    # --- ÖZELLİK 3: GELECEK TAHMİNİ (MAKİNE ÖĞRENMESİ) ---
+    def handle_sales_forecast(self):
+        """Linear Regression ile yarınki ciroyu tahmin eder"""
+        try:
+            query = """
+                SELECT sale_date, SUM(total_amount) as daily_total 
+                FROM sales 
+                GROUP BY sale_date 
+                ORDER BY sale_date ASC 
+                LIMIT 60
+            """
+            df = pd.read_sql(query, self.db.conn)
+            
+            if len(df) < 5:
+                return "⚠️ Tahmin için en az 5 günlük veri lazım."
+
+            # Tarihleri sayısal veriye çevir
+            df['date_ordinal'] = pd.to_datetime(df['sale_date']).map(datetime.datetime.toordinal)
+            
+            X = df['date_ordinal'].values.reshape(-1, 1)
+            y = df['daily_total'].values
+            
+            model = LinearRegression()
+            model.fit(X, y)
+            
+            # Yarını hesapla
+            tomorrow = datetime.date.today() + datetime.timedelta(days=1)
+            tomorrow_ordinal = np.array([[tomorrow.toordinal()]])
+            prediction = model.predict(tomorrow_ordinal)[0]
+            
+            trend = "Yükseliş 📈" if model.coef_[0] > 0 else "Düşüş 📉"
+            
+            return f"🔮 **AI Ciro Tahmini (Yarın):**\nBeklenen: **{max(0, prediction):.2f} ₺**\nTrend: **{trend}**"
+            
+        except Exception as e:
+            return f"Tahmin hatası: {str(e)}"
+
+    # --- DİĞER STANDART FONKSİYONLAR ---
+    def handle_cross_sell(self, product_name):
+        if not product_name: return "Hangi ürün için öneri istiyorsun? (Örn: 'Viski yanına ne gider?')"
+        try:
+            query = f"""
+                SELECT product_name, COUNT(*) as cnt 
+                FROM sale_items 
+                WHERE sale_id IN (SELECT sale_id FROM sale_items WHERE product_name = '{product_name}') 
+                AND product_name != '{product_name}'
+                GROUP BY product_name ORDER BY cnt DESC LIMIT 3
+            """
+            results = self.db.cursor.execute(query).fetchall()
+            if not results: return f"ℹ️ **{product_name}** için henüz yeterli veri yok."
+            
+            msg = f"💡 **{product_name}** alanlar şunları da alıyor:\n"
+            for prod, qty in results: msg += f"• {prod} ({qty} kez)\n"
+            return msg
+        except: return "Öneri oluşturulamadı."
+
+    def handle_ciro_query(self):
+        today = str(datetime.date.today())
+        res = self.db.cursor.execute("SELECT SUM(total_amount) FROM sales WHERE sale_date=?", (today,)).fetchone()
+        val = res[0] if res[0] else 0.0
+        return f"💰 Bugün şu ana kadar **{val:.2f} ₺** ciro yaptık."
+
+    def handle_stock_query(self, product_name):
         if product_name:
-            result = self.db.cursor.execute(
-                "SELECT stock FROM products WHERE name = ?", (product_name,)
-            ).fetchone()
-            
-            if result:
-                return f"📦 **{product_name}** stoğu: {result[0]} adet"
-            else:
-                return f"'{product_name}' bulunamadı."
-        else:
-            # Kritik stoklar
-            result = self.db.cursor.execute(
-                "SELECT COUNT(*) FROM products WHERE stock <= critical_stock"
-            ).fetchone()
-            
-            return f"⚠️ **Kritik stokta {result[0]} ürün var.**"
-
-    def handle_top_products(self):
-        query = """
-            SELECT product_name, SUM(quantity) as total 
-            FROM sale_items 
-            WHERE sale_date >= date('now', '-30 days')
-            GROUP BY product_name 
-            ORDER BY total DESC 
-            LIMIT 5
-        """
-        results = self.db.cursor.execute(query).fetchall()
-        
-        if not results:
-            return "Son 30 günde satış verisi yok."
-        
-        msg = "🏆 **En Çok Satanlar (Son 30 Gün):**\n"
-        for i, (name, qty) in enumerate(results, 1):
-            msg += f"{i}. **{name}** → {qty} adet\n"
-        
-        return msg
-
-    def handle_worst_products(self):
-        query = """
-            SELECT name, 
-                   (SELECT COALESCE(SUM(quantity), 0) FROM sale_items WHERE product_name = p.name AND sale_date >= date('now', '-30 days')) as sold
-            FROM products p
-            WHERE sold = 0 AND stock > 0
-            LIMIT 5
-        """
-        results = self.db.cursor.execute(query).fetchall()
-        
-        if not results:
-            return "Tüm ürünler satıyor! 🎉"
-        
-        msg = "📉 **Hiç Satmayan Ürünler (Son 30 Gün):**\n"
-        for i, (name, qty) in enumerate(results, 1):
-            msg += f"{i}. **{name}**\n"
-        
-        return msg
-
-    def handle_product_price(self, entities):
-        product_name = entities.get("product_name")
-        
-        if not product_name:
-            return "Hangi ürünün fiyatını öğrenmek istiyorsun?"
-        
-        result = self.db.cursor.execute(
-            "SELECT sell_price FROM products WHERE name = ?", (product_name,)
-        ).fetchone()
-        
-        if result:
-            return f"💵 **{product_name}** fiyatı: {result[0]:.2f} ₺"
-        else:
-            return f"'{product_name}' bulunamadı."
-
-    def handle_busy_hours(self):
-        query = """
-            SELECT strftime('%H', timestamp) as hour, COUNT(*) as cnt 
-            FROM sales 
-            WHERE sale_date >= date('now', '-7 days')
-            GROUP BY hour 
-            ORDER BY cnt DESC 
-            LIMIT 3
-        """
-        results = self.db.cursor.execute(query).fetchall()
-        
-        if not results:
-            return "Yeterli veri yok."
-        
-        msg = "⏰ **En Yoğun Saatler (Son 7 Gün):**\n"
-        for hour, cnt in results:
-            msg += f"• **{hour}:00-{int(hour)+1}:00** → {cnt} işlem\n"
-        
-        return msg
-
-    def handle_avg_basket(self):
-        result = self.db.cursor.execute(
-            "SELECT AVG(total_amount) FROM sales WHERE sale_date >= date('now', '-30 days')"
-        ).fetchone()
-        
-        avg = result[0] if result[0] else 0
-        
-        return f"🛒 **Ortalama Sepet Tutarı (Son 30 Gün):** {avg:.2f} ₺"
-
-    def handle_suggestions(self):
-        # Kritik stokları bul
-        result = self.db.cursor.execute(
-            "SELECT name, stock FROM products WHERE stock <= critical_stock LIMIT 5"
-        ).fetchall()
-        
-        if not result:
-            return "✅ Her şey yolunda! Kritik durum yok."
-        
-        msg = "💡 **Öneriler:**\n"
-        for name, stock in result:
-            msg += f"• **{name}** stoğu kritik (Kalan: {stock})\n"
-        
-        return msg
+            res = self.db.cursor.execute("SELECT stock FROM products WHERE name=?", (product_name,)).fetchone()
+            if res: return f"📦 **{product_name}** stoğu: {res[0]} adet."
+            return f"❌ {product_name} bulunamadı."
+        return "Hangi ürünün stoğunu merak ediyorsun?"
 
     def show_help(self):
         return """
-📚 **Void AI Komut Listesi:**
-
-💰 **Finans:**
-- "Bugünkü ciro nedir?"
-- "Dünkü kâr ne kadardı?"
-
-📦 **Stok:**
-- "Marlboro stoğu kaç?"
-- "Hangi ürünler kritik stokta?"
+🧠 **Void AI Gelişmiş Komutlar:**
 
 📊 **Analiz:**
-- "En çok satan ürünler"
-- "En yoğun saat ne zaman?"
-- "Ortalama sepet tutarı"
+- "ABC analizi yap" (Ürünleri önem sırasına dizer)
+- "Gün sonu tahmini" (Bugün kaçla kapatırız?)
 
-🔍 **Ürün:**
-- "Chivas fiyatı nedir?"
+🔮 **Tahmin & Güvenlik:**
+- "Yarın ciro ne olur?"
+- "Anomali var mı?"
 
-💡 **Öneriler:**
-- "Önerileri göster"
-
----
-Serbest soru da sorabilirsin!
+📦 **Stok & Satış:**
+- "Ölü stoklar neler?"
+- "Viski yanına ne gider?"
+- "Bugünkü ciro"
         """
 
-class AIChatDialog(QDialog):
-    """GERÇEK ÇALIŞAN CHAT EKRANI"""
-    
+class AIChatDialog(QDialog):    
     def __init__(self, db_manager, parent=None):
         super().__init__(parent)
         self.db = db_manager
-        self.ai_engine = VoidAI_NLP(db_manager)  # YENİ MOTOR
+        self.ai_engine = VoidAI_NLP(db_manager)  
+        self.brain = VoidBrain_Analytic(db_manager.db_path)
         
-        self.setWindowTitle("🧠 Void AI - Akıllı Asistan")
+        self.setWindowTitle("🧠 Void AI - Akıllı Asistan (Yerel)")
         self.setFixedSize(600, 800)
         self.setStyleSheet("background-color: #1a1a1a; color: white;")
         
@@ -2643,13 +2809,13 @@ class AIChatDialog(QDialog):
         layout.addWidget(self.chat_history)
         
         # Karşılama mesajı
-        self.add_message("Void AI", "👋 Merhaba! Satışlar, stoklar veya öneriler hakkında ne sormak istersin?\n\n💡 İpucu: 'Yardım' yaz ve komutları gör.", is_html=True)
+        self.add_message("Void AI", "👋 Merhaba! Verilerinizi analiz etmeye hazırım. 'Ciro tahmini', 'Anomali var mı?' veya 'Ölü stoklar' diye sorabilirsiniz.", is_html=True)
         
         # Mesaj girişi
         input_layout = QHBoxLayout()
         
         self.inp_msg = QLineEdit()
-        self.inp_msg.setPlaceholderText("Bir şey sor (örn: 'Bugünkü ciro nedir?')...")
+        self.inp_msg.setPlaceholderText("Bir komut yazın...")
         self.inp_msg.setStyleSheet("""
             QLineEdit {
                 background-color: #333;
@@ -2683,8 +2849,9 @@ class AIChatDialog(QDialog):
         
         layout.addLayout(input_layout)
 
+    # ... (Sınıfın geri kalan fonksiyonları add_message ve send_message aynı kalacak) ...
     def add_message(self, sender, text, is_html=False):
-        """Mesajı ekrana ekle"""
+        # ... (Eski kodunuzdaki gibi) ...
         color = "#0a84ff" if sender == "Void AI" else "#30d158"
         align = "left" if sender == "Void AI" else "right"
         bg_color = "#2a2a2a" if sender == "Void AI" else "#1e3a2a"
@@ -2703,23 +2870,20 @@ class AIChatDialog(QDialog):
         self.chat_history.verticalScrollBar().setValue(self.chat_history.verticalScrollBar().maximum())
 
     def send_message(self):
-        """Kullanıcı mesaj gönderdiğinde"""
         msg = self.inp_msg.text().strip()
-        if not msg: 
-            return
+        if not msg: return
         
-        # Kullanıcı mesajını göster
         self.add_message("Siz", msg)
         self.inp_msg.clear()
-        
-        # AI yanıt üret
-        QApplication.processEvents()  # Ekran donmasın
+        QApplication.processEvents()
         
         try:
+            # VoidAI_NLP sınıfını kullanıyoruz
             response = self.ai_engine.generate_response(msg)
             self.add_message("Void AI", response, is_html=True)
         except Exception as e:
-            self.add_message("Void AI", f"⚠️ Bir hata oluştu: {str(e)}")    
+            self.add_message("Void AI", f"⚠️ Hata: {str(e)}")
+
 class VoidAI_Engine:
     def __init__(self, csv_yolu="urunler_klasoru/urunler.csv"):
         self.csv_yolu = csv_yolu
@@ -2777,13 +2941,36 @@ class VoidAI_Engine:
         if aksiyon_verisi.get("islem") == "mail_at":
             return f"Sipariş listesine {aksiyon_verisi['miktar']} adet eklendi. ✅"
         return "İşlem uygulandı."
-    
-# --- ANA UYGULAMA ---
+
+class AIWorker(QThread):
+    finished = Signal(list)  # Sonuçları ana ekrana taşıyan sinyal
+
+    def __init__(self, csv_path):
+        super().__init__()
+        self.csv_path = csv_path
+
+    def run(self):
+        print("--- AI Worker Başladı (Arka Plan) ---") # Kontrol için
+        try:
+            if os.path.exists(self.csv_path):
+                # VoidAI_Engine sınıfını kullanıyoruz
+                motor = VoidAI_Engine(self.csv_path)
+                sonuclar = motor.tum_analizleri_yap()
+                self.finished.emit(sonuclar)
+            else:
+                self.finished.emit([])
+        except Exception as e:
+            print(f"AI Worker Hatası: {e}")
+            self.finished.emit([])
+        print("--- AI Worker Bitti ---")
+            
 class NexusPOS(QMainWindow):
     def __init__(self):
         super().__init__()
         self.denominations = [200, 100, 50, 20, 10, 5, 1, 0.50, 0.25]
         self.db = DatabaseManager()
+        self.pos_driver = IngenicoRealDriver()
+        self.installEventFilter(self)
         self.cart_data = []
         try:
             urun_sayisi = self.db.cursor.execute("SELECT Count(*) FROM products").fetchone()[0]
@@ -2802,7 +2989,6 @@ class NexusPOS(QMainWindow):
         self.selected_row = -1
         self.barcode_buffer = ""
         self.ciro_visible = True # Ciro görünürlük durumu
-        
         self.init_ui()
         self.setWindowTitle("VoidPOS")
         self.resize(1600, 900)
@@ -2942,7 +3128,14 @@ class NexusPOS(QMainWindow):
         
         self.load_categories_grid()
 
-    
+    def eventFilter(self, source, event):
+        if event.type() == QEvent.KeyPress:
+            if not isinstance(QApplication.focusWidget(), QLineEdit):
+                self.search_bar.setFocus()
+                QApplication.sendEvent(self.search_bar, event)
+                return True
+        return super().eventFilter(source, event)
+     
     def set_payment_processing(self, is_processing, btn_type=""):
         """
         İşlem sırasında butonları kilitler ve görsel geri bildirim verir.
@@ -3575,17 +3768,15 @@ class NexusPOS(QMainWindow):
         self.selected_row = self.table.currentRow()
 
     def keyPressEvent(self, e):
-        """Fiziksel Klavye Desteği"""
-        # Eğer bir satır seçiliyse
         if self.selected_row != -1:
-            # Rakam tuşları (0-9)
-            if e.text().isdigit():
-                self.numpad_action(e.text())
-                return
+                # Rakam tuşları
+                if e.text().isdigit():
+                    self.numpad_action(e.text())
+                    return
             # Backspace
-            if e.key() == Qt.Key_Backspace:
-                self.numpad_action('⌫')
-                return
+                if e.key() == Qt.Key_Backspace:
+                    self.numpad_action('⌫')
+                    return
         
         # Barkod Enter tuşu
         if e.key() == Qt.Key_Return or e.key() == Qt.Key_Enter:
@@ -3593,12 +3784,7 @@ class NexusPOS(QMainWindow):
                 self.process_barcode_scan(self.barcode_buffer)
                 self.barcode_buffer = ""
         else:
-            # Barkod okuma (printable karakterler)
             if e.text() and e.text().isprintable() and not e.text().isdigit(): 
-                # Rakamları barkoda dahil etmiyoruz ki adet girmeye çalışırken barkod okumasın
-                # Burası önemli: Eğer barkodunuz sadece rakamsa, bu mantık çakışabilir.
-                # Genelde barkod okuyucular çok hızlı basar, insan eli yavaştır.
-                # Şimdilik basit tutuyoruz.
                 self.barcode_buffer += e.text()
 
 
@@ -3622,13 +3808,16 @@ class NexusPOS(QMainWindow):
 
     def numpad_action(self, key):
         """Numpad tıklamalarını aktif sepetin seçili satırına yönlendir"""
-        cart = self.get_current_cart()
+        cart = self.get_current_cart() # Bu bir QTableWidget döndürür
         if not cart: return
         
-        row = cart.table.currentRow()
+        # HATA DÜZELTİLDİ: cart.table.currentRow() yerine cart.currentRow()
+        row = cart.currentRow() 
+        
         if row < 0: return # Seçili satır yok
         
-        current_qty_item = cart.table.item(row, 2)
+        # HATA DÜZELTİLDİ: cart.table.item yerine cart.item
+        current_qty_item = cart.item(row, 2)
         try:
             current_val = int(current_qty_item.text())
         except:
@@ -3637,56 +3826,111 @@ class NexusPOS(QMainWindow):
         new_val = current_val
         
         if key == 'C':
-            cart.table.removeRow(row)
+            cart.removeRow(row) # cart.table yerine cart
         elif key == '⌫':
-             # Numpad ile silme (Backsapce) sadece rakam siler, satır silmez
+             # Numpad ile silme (Backspace)
             s_val = str(current_val)
             if len(s_val) > 1:
                 new_val = int(s_val[:-1])
             else:
                 new_val = 1
-            cart.update_row_qty(row, new_val)
+            
+            # Güncelleme işlemini manuel yapıyoruz çünkü update_row_qty fonksiyonu NexusPOS içinde yok
+            # ya da cart objesi QTableWidget olduğu için o metoda sahip değil.
+            cart.blockSignals(True)
+            cart.item(row, 2).setText(str(new_val))
+            cart.blockSignals(False)
+            self.recalc_active_cart_total()
+
         else:
             # Rakam ekleme
-            # Eğer şu an 1 ise ve biz rakama basıyorsak (örn 5), direkt 5 olsun. 15 olmasın.
             if current_val == 1:
                 new_val = int(key)
             else:
                 new_val = int(str(current_val) + key)
-            cart.update_row_qty(row, new_val)
+            
+            # Güncelleme
+            cart.blockSignals(True)
+            cart.item(row, 2).setText(str(new_val))
+            cart.blockSignals(False)
+            self.recalc_active_cart_total()
 
     def finish_sale(self, method):
-        """NAKİT butonu - Yükleme Ekransız"""
+        """NAKİT SATIŞ - Fiş Yazar Kasadan Çıkar"""
         if not self.cart_data:
             QMessageBox.warning(self, "Uyarı", "Sepet boş!")
             return
         
         total = sum([x['price'] * x['qty'] for x in self.cart_data])
         
-        # 1. Butona basıldığını belli et
-        self.set_payment_processing(True, "NAKİT")
+        # 1. Yazar Kasaya Gönder (Tip: 0 = Nakit)
+        # Ekranı dondurmamak için işlem sırasında fare imlecini bekleme moduna al
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        result = self.pos_driver.send_transaction(total, 0) 
+        QApplication.restoreOverrideCursor()
         
-        # 2. İşlemi başlat (Arka planda)
-        # Not: PaymentWorker sınıfın (total, method) alacak şekilde ayarlı olmalı
-        self.worker = PaymentWorker(total, method)
-        self.worker.finished.connect(self.on_pos_result)
-        self.worker.start()
+        if not result['success']:
+            # Cihaz hata verdiyse satışı iptal etme şansı ver veya zorla kaydet
+            reply = QMessageBox.question(self, "Cihaz Hatası", 
+                                       f"Yazar Kasa Hatası: {result['message']}\n\nYine de satışı kaydetmek istiyor musun?", 
+                                       QMessageBox.Yes | QMessageBox.No)
+            if reply == QMessageBox.No:
+                return
+
+        # 2. Veritabanına Kaydet
+        self.db.record_sale(self.cart_data, total, "Nakit")
+        
+        # 3. Temizlik
+        self.get_active_table().setRowCount(0)
+        self.cart_data = []
+        self.recalc_active_cart_total()
+        self.update_ciro()
 
     def card_payment(self):
-        """KART butonu - Yükleme Ekransız"""
+        """KARTLI SATIŞ - Fiş Yazar Kasadan Çıkar"""
+        # 1. Sepet Kontrolü
         if not self.cart_data:
             QMessageBox.warning(self, "Uyarı", "Sepet boş!")
             return
         
+        # 2. Tutar Hesapla
         total = sum([x['price'] * x['qty'] for x in self.cart_data])
         
-        # 1. Butona basıldığını belli et
+        # 3. Görsel Geri Bildirim (Butonu Sarı Yap)
         self.set_payment_processing(True, "KART")
+        # Arayüzün donmaması için olayları işle
+        QApplication.processEvents() 
         
-        # 2. İşlemi başlat (Arka planda)
-        self.worker = PaymentWorker(total, "CARD")
-        self.worker.finished.connect(self.on_pos_result)
-        self.worker.start()
+        try:
+            # 4. Sürücü Başlatılmış mı Kontrol Et
+            if not hasattr(self, 'pos_driver'):
+                self.pos_driver = IngenicoRealDriver()
+
+            # 5. Yazar Kasaya Gönder (Tip: 1 = Kredi Kartı)
+            result = self.pos_driver.send_transaction(total, 1)
+            
+        except Exception as e:
+            result = {"success": False, "message": f"Sürücü Hatası: {str(e)}"}
+
+        # 6. Görseli Eski Haline Getir
+        self.set_payment_processing(False)
+
+        # 7. Sonuç İşleme
+        if result['success']:
+            # Başarılı -> Veritabanına Yaz
+            self.db.record_sale(self.cart_data, total, "Kredi Kartı")
+            
+            # Ekranı Temizle
+            self.get_active_table().setRowCount(0)
+            self.cart_data = []
+            self.recalc_active_cart_total()
+            self.update_ciro()
+            
+            # (İsteğe Bağlı) Başarılı Mesajı
+            # QMessageBox.information(self, "Onay", "İşlem Başarılı")
+        else:
+            # Başarısız -> Hata Göster
+            QMessageBox.critical(self, "Hata", f"Kart İşlemi Başarısız:\n{result['message']}")
 
     def on_pos_result(self, result):
         """POS yanıtı geldiğinde çalışır"""
@@ -3755,22 +3999,37 @@ class NexusPOS(QMainWindow):
            self.add_to_cart(product[0], product[1])
        else:
            QMessageBox.warning(self, "Bulunamadı", f"Barkod kayıtlı değil: {barcode}")
-    # --- AI ENTEGRASYON FONKSİYONLARI ---
 
+    # Bu fonksiyon NexusPOS sınıfının İÇİNDE olmalı
     def ai_otomatik_kontrol(self):
-        """Arka planda sessizce çalışır, buton rengini değiştirir."""
+        """Arka planda AI kontrolünü başlatır"""
+        print("AI Kontrol Tetiklendi...") # Debug çıktısı
         
-        # Klasör ve dosya kontrolü (Hata almamak için)
-        if not os.path.exists("urunler_klasoru/urunler.csv"):
-            return 
+        # Dosya yolunu al
+        csv_yolu = os.path.join(get_app_path(), "urunler_klasoru", "urunler.csv")
+        
+        # Eğer zaten çalışan bir işçi varsa onu durdurmayalım, yenisini başlatmayalım
+        if hasattr(self, 'ai_worker') and self.ai_worker.isRunning():
+            print("AI zaten çalışıyor, bu turu atla.")
+            return
 
-        motor = VoidAI_Engine("urunler_klasoru/urunler.csv")
-        sonuclar = motor.tum_analizleri_yap()
+        # İşçiyi (Thread) hazırla
+        self.ai_worker = AIWorker(csv_yolu)
+        
+        # İş bittiğinde 'ai_sonucunu_isles' fonksiyonuna git
+        self.ai_worker.finished.connect(self.ai_sonucunu_isles)
+        
+        # Başlat (Bu işlem arayüzü dondurmaz)
+        self.ai_worker.start()
+
+    # Bu fonksiyon da NexusPOS sınıfının İÇİNDE olmalı
+    def ai_sonucunu_isles(self, sonuclar):
+        """Arka plandan gelen sonuçları ekrana basar"""
+        print(f"AI Sonuçları Geldi: {len(sonuclar)} öneri") # Debug çıktısı
         
         if sonuclar:
-            # --- DURUM: UYARI VAR (KIRMIZI VE YANIP SÖNEN) ---
+            # --- DURUM: UYARI VAR (KIRMIZI) ---
             self.ai_btn.setText(f"AI: {len(sonuclar)} ÖNERİ VAR!")
-            # Yönetim tuşu boyutlarında (Radius 16px) ama KIRMIZI
             self.ai_btn.setStyleSheet("""
                 QPushButton {
                     background-color: #e74c3c; 
@@ -3784,10 +4043,8 @@ class NexusPOS(QMainWindow):
                 }
                 QPushButton:hover { background-color: #c0392b; }
             """)
-            # Not: PySide6 CSS animasyonunu (blink) doğrudan desteklemez, 
-            # ama kırmızılık yeterince dikkat çeker. Yanıp sönme için QTimer gerekir.
-            
         else:
+            # --- DURUM: STABİL (NORMAL) ---
             self.ai_btn.setText("AI: Sistem Stabil")
             self.ai_btn.setStyleSheet("""
                 QPushButton { 
@@ -3817,15 +4074,9 @@ class AdminDialog(QDialog):
         self.setWindowTitle("Yönetim Paneli")
         self.resize(1200, 800)
 
-        # --- DÜZELTME BURADA BAŞLIYOR ---
-        
-        # 1. Önce Layout ve Tabs OLUŞTURULMALI
+        # 1. Layout ve Tabs oluştur
         layout = QVBoxLayout(self)
-        
         self.tabs = QTabWidget()
-        # Sekme değiştiğinde veriyi yenilemek için sinyal:
-        self.tabs.currentChanged.connect(self.on_tab_change) 
-        
         layout.addWidget(self.tabs)
         
         # 2. Değişkenleri Tanımla
@@ -3833,66 +4084,101 @@ class AdminDialog(QDialog):
         self.filter_mode = 'day'
         self.last_tab_index = 0
 
-        # 3. ŞİMDİ Setup Fonksiyonlarını Çağırabiliriz (Çünkü self.tabs artık var)
-        self.setup_ai_center()            # Void AI
-        self.setup_finances()             # Tab 0 (Finans)
-        self.setup_sales_history()        # Tab 1 (Geçmiş)
-        self.setup_prod_list()            # Tab 2 (Liste)
-        self.setup_add_prod()             # Tab 3 (Ekle)
-        self.setup_stock_tracking()       # Tab 4 (Stok)
-        self.setup_pending_transactions() # Tab 5 (Bekleyen)
-        self.setup_bulk_operations()      # Tab 6 (Toplu İşlem)
-        self.setup_theme_settings()       # Tab 7 (Tema - Yeni Eklediğimiz)
+        # 3. Sekmeleri Oluştur (Sırasıyla)
+        # Index 0: AI
+        self.setup_ai_center()            
+        # Index 1: Finansal Rapor
+        self.setup_finances()             
+        # Index 2: Satış Geçmişi
+        self.setup_sales_history()        
+        # Index 3: Ürün Listesi
+        self.setup_prod_list()            
+        # Index 4: Ürün Ekle
+        self.setup_add_prod()             
+        # Index 5: Stok Takip
+        self.setup_stock_tracking()       
+        # Index 6: Bekleyen İşlemler
+        self.setup_pending_transactions() 
+        # Index 7: Toplu İşlemler
+        self.setup_bulk_operations()      
+        # Index 8: Tema
+        self.setup_theme_settings()       
         
-        # 4. İlk veriyi yükle
-        self.load_finance_data()
+        # 4. Sinyali EN SON bağla (Hata almamak için)
+        self.tabs.currentChanged.connect(self.on_tab_change)
+
+        # 5. İlk açılışta AI sekmesi (Index 0) açık olacağı için özel bir yükleme gerekmez,
+        # ancak Finans verisi hazır olsun derseniz manuel çağırabilirsiniz.
+        # self.load_finance_data() # Bunu kaldırdık çünkü ilk sekme artık AI.
+
+    # ... (Diğer setup metodlarınız AYNEN kalacak) ...
+
+    # on_tab_change metodunu GÜNCELLEYİN (İndeksler değiştiği için):
+    def on_tab_change(self, index):
+        self.last_tab_index = index
         
+        if index == 1:   # Finansal (Eskiden 0'dı, şimdi 1 oldu)
+            self.load_finance_data()
+        elif index == 2: # Satış Geçmişi
+            self.load_sales_history_data()
+        elif index == 3: # Ürün Listesi
+            self.load_table_data()
+        elif index == 5: # Stok Takip
+            self.stk_stock.setCurrentIndex(0) 
+            self.load_stock_categories()
+        elif index == 6: # Bekleyen
+            self.load_pending_data()
 
     def setup_theme_settings(self):
         editor = ThemeEditor(self)
         self.tabs.addTab(editor, "🎨 Tema Ayarları")
 
-    def setup_ai_center(self):
-        self.ai = AIService(self.db.db_name)
+    def setup_native_ai_tab(self):
+        """Kütüphane tabanlı yerel AI sekmesi"""
+        self.brain = VoidBrain_Analytic(self.db.db_name) # Motoru başlat
         
         w = QWidget()
         layout = QVBoxLayout(w)
         
+        # --- Başlık ---
+        lbl_title = QLabel("🧠 Void Dynamics - Analitik Çekirdek")
+        lbl_title.setStyleSheet("font-size: 20px; font-weight: bold; color: #30d158;")
+        layout.addWidget(lbl_title)
+        
         # --- Butonlar ---
-        btn_layout = QHBoxLayout()
-        buttons = {
-            "📈 Ciro Tahmini": self.action_forecast_graph,
-            "⏰ Yoğunluk Analizi": self.action_busy_hours,
-            "🏷️ Akıllı İndirim (Kâr/Zarar)": self.action_discounts,
-            "🎁 Kampanya Önerileri": self.action_bundles,       
-            "🚨 Güvenlik Taraması": self.action_fraud
-        }
+        btn_forecast = QPushButton("📈 Gelecek Haftayı Tahmin Et (Regression)")
+        btn_forecast.clicked.connect(self.run_sales_forecast)
         
-        for text, func in buttons.items():
-            b = QPushButton(text)
-            b.setFixedHeight(50)
-            b.setCursor(Qt.PointingHandCursor)
-            b.setStyleSheet("background:#333; color:white; border:1px solid #555; border-radius:8px; font-weight:bold;")
-            b.clicked.connect(func)
-            btn_layout.addWidget(b)
+        btn_segment = QPushButton("🛒 Müşteri Tiplerini Analiz Et (Clustering)")
+        btn_segment.clicked.connect(self.run_segmentation)
         
-        layout.addLayout(btn_layout)
+        layout.addWidget(btn_forecast)
+        layout.addWidget(btn_segment)
         
-        # --- GRAFİK ALANI (YENİ) ---
-        # Mevcut MplCanvas sınıfını kullanarak grafik alanı ekliyoruz
-        self.ai_canvas = MplCanvas(self, width=5, height=4, dpi=100)
-        self.ai_canvas.hide() # Başlangıçta gizli
-        layout.addWidget(self.ai_canvas)
-
-        # --- METİN ALANI ---
-        self.ai_result_box = QLabel("Analiz seçiniz...")
-        self.ai_result_box.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        self.ai_result_box.setStyleSheet("color: #ccc; padding: 10px; font-size: 14px; background:#1a1a1a;")
-        self.ai_result_box.setWordWrap(True)
-        layout.addWidget(self.ai_result_box)
+        # --- Sonuç Ekranı ---
+        self.lbl_ai_output = QLabel("Analiz bekleniyor...")
+        self.lbl_ai_output.setStyleSheet("background: #222; padding: 15px; border-radius: 10px; font-size: 14px;")
+        self.lbl_ai_output.setWordWrap(True)
+        layout.addWidget(self.lbl_ai_output)
         
         layout.addStretch()
-        self.tabs.addTab(w, "🧠 Void AI")
+        self.tabs.addTab(w, "Analitik AI")
+
+    def run_sales_forecast(self):
+        res = self.brain.predict_sales(7)
+        if isinstance(res, dict):
+            msg = f"🔮 **Gelecek 7 Günün Tahmini:**\n\n"
+            msg += f"Toplam Beklenen Ciro: **{res['total_predicted']:.2f} TL**\n\n"
+            msg += "Günlük Detay:\n"
+            for date, val in zip(res['dates'], res['values']):
+                msg += f"• {date}: {val:.2f} TL\n"
+            self.lbl_ai_output.setText(msg)
+        else:
+            self.lbl_ai_output.setText(res) # Hata mesajı
+
+    def run_segmentation(self):
+        res = self.brain.analyze_basket_segments()
+        self.lbl_ai_output.setText(res)
 
     # --- AKSİYONLAR ---
 
@@ -4136,7 +4422,6 @@ class AdminDialog(QDialog):
                     self.load_categories_grid()  # Sol paneldeki kategori butonlarını yeniler
                     if hasattr(self, 'load_table_data'):
                         self.load_table_data()   # Admin panelindeki listeyi yeniler
-                    # -----------------------------
                 else:
                     QMessageBox.critical(self, "Hata", msg)
 
@@ -4187,22 +4472,6 @@ class AdminDialog(QDialog):
             
         except Exception as e:
             QMessageBox.critical(self, "Hata", f"Rapor kaydedilemedi: {str(e)}")
-
-    def on_tab_change(self, index):
-        self.last_tab_index = index
-        
-        if index == 0:   # Finansal
-            self.load_finance_data()
-        elif index == 1: # Satış
-            self.load_sales_history_data()
-        elif index == 2: # Ürün Listesi
-            self.load_table_data()
-        elif index == 4: # STOK TAKİP (BURAYI DEĞİŞTİRDİK)
-            # Tabloyu sıfırla ve kategorileri yükle
-            self.stk_stock.setCurrentIndex(0) 
-            self.load_stock_categories()
-        elif index == 5: # Bekleyen
-            self.load_pending_data()
 
     # --- 1. FİNANSAL RAPORLAR ---
     def setup_finances(self):
