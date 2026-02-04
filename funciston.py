@@ -2128,14 +2128,6 @@ class AIService:
         except:
             return None
 
-# =====================================================
-# GELİŞTİRİLMİŞ VOID AI - DOĞAL DİL İŞLEME
-# =====================================================
-
-
-import requests
-import json
-import datetime
 
 class VoidAI_Local:
     """Tamamen Yerel ve Çevrimdışı Çalışan AI (Ollama)"""
@@ -2153,13 +2145,6 @@ class VoidAI_Local:
         return f"Bugün tarih: {today}. Şu anki ciro: {ciro} TL."
 
     def generate_response(self, user_msg):import sqlite3
-import pandas as pd
-import numpy as np
-from sklearn.linear_model import LinearRegression
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler
-import datetime
 
 class VoidBrain_Analytic:
     def __init__(self, db_path="voidpos.db"):
@@ -2540,261 +2525,775 @@ class VoidBrain_Analytic:
             return None
         except:
             return None
-        
+
+import re
+import sqlite3
+import difflib
+import datetime
+
 class VoidAI_NLP:
     """
-    Void AI 3.0: 
-    - Fuzzy Logic (Yazım hatası toleransı)
-    - Forecasting (Gelecek tahmini)
-    - Cross-Sell (Ürün önerisi)
-    - Anomaly Detection (Hata/Fraud yakalama)
-    - Dead Stock Logic (Stok eritme stratejisi)
+    Void AI 11.0 (FIXED & ENHANCED):
+    - Fiyat parsing hatası düzeltildi
+    - Stok takip sistemi
+    - Mal alma önerileri
+    - Satış trendleri
+    - Barkod desteği
+    - Kategori atama
     """
     
     def __init__(self, db_manager):
         self.db = db_manager
         self.context = {} 
+        self.last_backup = {}
 
         self.intent_patterns = {
-            "ciro": ["ciro", "kazanç", "gelir", "hasılat", "satış", "durum"],
-            "kar": ["kâr", "kar", "net", "profit", "kazancımız"],
-            "stok": ["stok", "kaç tane", "envanter", "kalan", "mevcut"],
-            "tahmin": ["tahmin", "gelecek", "beklenti", "yarın ne olur", "haftaya"],
-            "oneri_urun": ["ne satalım", "yanına ne gider", "kombin", "öneri"],
-            "anomali": ["anomali", "hata", "yanlış işlem", "şüpheli", "kaçak", "kontrol et", "tuhaflık", "güvenlik", "dengesizlik"],
-            "olu_stok": ["ölü stok", "olu stok", "satmayan", "elimde kalan", "stok eritme", "ne yapayım", "zarar"],
-            "abc_analizi": ["abc", "değerli ürünler", "önemli ürünler", "sınıflandırma", "pareto"],
-            "gun_sonu": ["kapanış", "kaçla kapatırız", "akşam ne olur", "gün sonu", "bugün kaç olur"],
-            "yardim": ["yardım", "komutlar", "ne yapabilirsin", "destek"],
+            "ciro": ["ciro", "kazanç", "gelir", "hasılat", "bugün ne kadar", "kasa"],
+            "tahmin": ["tahmin", "gelecek", "beklenti"],
+            "stok_rapor": ["stok raporu", "stok durumu", "ne kadar stok", "hangi ürünler bitmek üzere"],
+            "siparis_oneri": ["ne sipariş", "mal al", "sipariş ver", "tedarik"],
+            "satis_trend": ["en çok satan", "popüler", "trend", "çok satılan"],
+            "anomali": ["anomali", "hata", "kaçak", "tuhaflık"],
+            "yardim": ["yardım", "ne yapabilirsin", "komutlar"],
         }
 
+    # ============================================================
+    # 🛠️ YARDIMCI ARAÇLAR
+    # ============================================================
+    
     def detect_intent(self, user_msg):
-        """Fuzzy Matching ile akıllı niyet tespiti"""
+        """Kullanıcının genel niyetini algılar"""
         msg_lower = user_msg.lower()
-        
         for intent, keywords in self.intent_patterns.items():
             for kw in keywords:
-                match = difflib.get_close_matches(kw, msg_lower.split(), n=1, cutoff=0.7)
-                if match or kw in msg_lower:
+                if kw in msg_lower:
                     return intent
         return "unknown"
 
-    def extract_product_smart(self, user_msg):
-        """Mesaj içinden ürün ismini ayıklar"""
-        msg_lower = user_msg.lower()
+    def extract_number(self, text):
+        """
+        Gelişmiş Sayı Temizleyici:
+        '1.250' -> 1250.0
+        '1250' -> 1250.0
+        '12,50' -> 12.5
+        """
+        if not text: return None
+        clean_text = re.sub(r'[^\d.,]', '', text)
+        
+        if not any(char.isdigit() for char in clean_text):
+            return None
+
+        # Düz sayı
+        if '.' not in clean_text and ',' not in clean_text:
+            return float(clean_text)
+
+        # Türkiye standardı: Nokta binlik, Virgül ondalık
+        val = clean_text.replace('.', '') 
+        val = val.replace(',', '.')       
+        
         try:
-            products = self.db.cursor.execute("SELECT name FROM products").fetchall()
-            product_list = [p[0] for p in products]
-            product_list_lower = [p.lower() for p in product_list]
-            
-            # 1. Tam eşleşme
-            for prod in product_list:
-                if prod.lower() in msg_lower:
-                    return prod
-            
-            # 2. Yakın eşleşme (Marlbro -> Marlboro)
-            words = msg_lower.split()
-            for word in words:
-                matches = difflib.get_close_matches(word, product_list_lower, n=1, cutoff=0.7)
-                if matches:
-                    idx = product_list_lower.index(matches[0])
-                    return product_list[idx]
+            return float(val)
         except:
-            pass
+            return None
+
+    def find_product_by_barcode(self, barcode):
+        """Barkoda göre ürün bilgisi döner"""
+        try:
+            result = self.db.cursor.execute(
+                "SELECT id, name FROM products WHERE barcode=?", 
+                (barcode,)
+            ).fetchone()
+            return result if result else None
+        except:
+            return None
+
+    def extract_category(self, text):
+        """Metinden kategori çıkarır"""
+        text_lower = text.lower()
+        
+        category_patterns = {
+            "viski": ["viski", "whisky", "whiskey"],
+            "vodka": ["vodka"],
+            "rakı": ["rakı", "raki"],
+            "bira": ["bira", "beer"],
+            "şarap": ["şarap", "wine"],
+            "likör": ["likör", "liqueur"],
+            "cin": ["cin", "gin"],
+            "rom": ["rom", "rum"],
+            "tekila": ["tekila", "tequila"],
+            "şampanya": ["şampanya", "champagne"],
+            "sigara": ["sigara", "cigarette"],
+            "içecek": ["içecek", "drink", "meşrubat"],
+            "atıştırmalık": ["atıştırmalık", "cips", "gofret"],
+        }
+        
+        for category, keywords in category_patterns.items():
+            for keyword in keywords:
+                if keyword in text_lower:
+                    return category.title()
+        
+        group_match = re.search(r'(\w+)\s+grubuna', text_lower)
+        if group_match:
+            return group_match.group(1).title()
+        
         return None
 
+    # ============================================================
+    # 🧠 ANA BEYİN (ROUTER)
+    # ============================================================
+
     def generate_response(self, user_msg):
-        """Ana beyin fonksiyonu"""
+        """Tüm trafiği yöneten ana fonksiyon"""
+        msg_lower = user_msg.lower()
+
+        # 1. GERİ ALMA
+        if "geri al" in msg_lower or "iptal et" in msg_lower:
+            return self.restore_backup()
+
+        # 2. STOK RAPORU
         intent = self.detect_intent(user_msg)
+        if intent == "stok_rapor":
+            return self.generate_stock_report()
         
-        # Ürün bağlamını yakala
-        found_product = self.extract_product_smart(user_msg)
-        if found_product:
-            self.context["last_product"] = found_product
-        target_product = found_product if found_product else self.context.get("last_product")
+        # 3. SİPARİŞ ÖNERİSİ
+        if intent == "siparis_oneri":
+            return self.generate_order_suggestion()
+        
+        # 4. SATIŞ TRENDİ
+        if intent == "satis_trend":
+            return self.generate_sales_trend()
 
-        try:
-            if intent == "ciro":
-                return self.handle_ciro_query()
-            elif intent == "tahmin":
-                res = self.brain.predict_sales(1) # Yarın için 1 gün
-                if isinstance(res, dict):
-                    return f"🔮 Yarınki Ciro Tahmini: **{res['total_predicted']:.2f} ₺**"
-                return str(res)
-            elif intent == "oneri_urun":
-                return self.handle_cross_sell(target_product)
-            elif intent == "stok":
-                return self.handle_stock_query(target_product)
-            elif intent == "anomali":
-                return self.detect_anomalies() # YENİ
-            elif intent == "abc_analizi":
-                return self.brain.perform_abc_analysis() 
-            elif intent == "gun_sonu":
-                return self.brain.predict_end_of_day()
-            elif intent == "olu_stok":
-                return self.suggest_dead_stock_action() # YENİ
-            elif intent == "yardim":
-                return self.show_help()
-            else:
-                return "🤔 Anlayamadım. 'ABC analizi yap' veya 'Gün sonu tahmini' diyebilirsin."
-        except Exception as e:
-            return f"⚠️ Analiz hatası: {str(e)}"
+        # 5. RAPORLAMA
+        if "kaç tane sattı" in msg_lower or "ne kadar sattı" in msg_lower:
+            return self.process_sales_query(msg_lower)
 
-    # --- ÖZELLİK 1: ANOMALİ TESPİTİ (GÜVENLİK) ---
-    def detect_anomalies(self):
-        """Isolation Forest algoritması ile şüpheli satışları bulur"""
-        try:
-            query = "SELECT id, total_amount, sale_date FROM sales ORDER BY id DESC LIMIT 500"
-            # pd.read_sql için self.db.conn nesnesi gereklidir
-            df = pd.read_sql(query, self.db.conn)
-            
-            if len(df) < 20:
-                return "⚠️ Anomali analizi için daha fazla satış verisi gerekiyor."
+        # 6. YENİ ÜRÜN EKLEME
+        if any(kw in msg_lower for kw in ["yeni ürün", "ürün ekle"]):
+            return self.process_new_product(user_msg)
 
-            # Modeli eğit
-            model = IsolationForest(contamination=0.05, random_state=42)
-            df['anomaly'] = model.fit_predict(df[['total_amount']])
-            
-            # Anomalileri filtrele (-1 anomali demektir)
-            anomalies = df[df['anomaly'] == -1]
-            
-            if anomalies.empty:
-                return "✅ Sistem taraması temiz. Şüpheli bir işlem bulunamadı."
-            
-            msg = "🚨 **DİKKAT! Şüpheli İşlemler Tespit Edildi:**\n"
-            msg += "(Ortalamadan sapmış işlemler aşağıdadır)\n\n"
-            
-            for _, row in anomalies.iterrows():
-                msg += f"• Fiş #{row['id']}: **{row['total_amount']:.2f} ₺** ({row['sale_date']})\n"
-            
-            msg += "\n👉 *Lütfen bu fişleri kontrol ediniz (İade/Hata olabilir).* "
-            return msg
-        except Exception as e:
-            return f"Anomali modülü hatası: {str(e)}"
+        # 7. KATEGORİ ATAMA
+        if "grubuna ekle" in msg_lower or "kategorisi" in msg_lower:
+            return self.process_category_assignment(user_msg)
 
-    # --- ÖZELLİK 2: ÖLÜ STOK YÖNETİMİ (KÂRLILIK) ---
-    def suggest_dead_stock_action(self):
-        """Son 30 gündür satılmayan ürünler için fiyatlandırma stratejisi önerir"""
-        try:
-            # SQL: Stokta var ama son 30 gündür satılmamış
-            query = """
-                SELECT name, stock, sell_price, cost_price 
-                FROM products 
-                WHERE stock > 0 
-                AND name NOT IN (
-                    SELECT DISTINCT product_name 
-                    FROM sale_items 
-                    WHERE sale_date >= date('now', '-30 days')
-                )
-                ORDER BY stock DESC 
-                LIMIT 5
-            """
-            results = self.db.cursor.execute(query).fetchall()
+        # 8. KOMPLEKS GÜNCELLEME
+        action_keywords = ["yap", "güncelle", "değiştir", "artır", "azalt", "sil", "kaldır", "zam", "indirim", "ekle", "olsun"]
+        if any(kw in msg_lower for kw in action_keywords):
+            return self.process_complex_update(user_msg)
+
+        # 9. GENEL SORGULAR
+        if intent == "ciro":
+            return self.handle_ciro_query()
+        elif intent == "yardim":
+            return self.show_help()
+        
+        return "🤔 Sadece izliyorum. Bir işlem yapmak istersen komut ver.\n📖 'Yardım' yazarak komutları görebilirsin."
+
+    # ============================================================
+    # ⚙️ GÜNCELLEME MOTORU (DÜZELTME İLE)
+    # ============================================================
+
+    def process_complex_update(self, text):
+        """Metni ürünlere/barkodlara göre parçalar ve komutları uygular"""
+        text_lower = text.lower()
+        
+        # 1. Veritabanından mevcut ürünleri çek
+        products = self.db.cursor.execute("SELECT id, name, barcode FROM products").fetchall()
+        
+        search_items = []
+        
+        for pid, name, barcode in products:
+            # İsim ile arama (uzunluk önemli - "J&B" vs "Jägermeister")
+            search_items.append({
+                'key': name.lower(), 
+                'id': pid, 
+                'display': name, 
+                'len': len(name),
+                'type': 'name'
+            })
             
-            if not results:
-                return "👏 Harika! 'Ölü stok' (hiç satmayan) ürününüz yok."
+            # Barkod ile arama
+            if barcode:
+                search_items.append({
+                    'key': barcode, 
+                    'id': pid, 
+                    'display': f"{name}", 
+                    'len': len(barcode),
+                    'type': 'barcode'
+                })
+
+        # UZUN İSİMLERİ ÖNCE BUL (Jägermeister önce, J&B sonra)
+        search_items.sort(key=lambda x: x['len'], reverse=True)
+
+        found_matches = []
+        temp_text = text_lower
+
+        # 2. TAM EŞLEŞME ARAMASI
+        for item in search_items:
+            # Kelime sınırlarını kontrol et
+            pattern = r'\b' + re.escape(item['key']) + r'\b'
+            match = re.search(pattern, temp_text, re.IGNORECASE)
             
-            msg = "❄️ **Stok Eritme Önerileri (Ölü Stoklar):**\n"
-            for name, stock, price, cost in results:
-                # Başabaş noktası (Maliyet + %10 Masraf)
-                breakeven = cost * 1.1 
-                
-                if price > breakeven:
-                    discount_price = breakeven
-                    msg += f"• **{name}** ({stock} adet): 30 gündür hareketsiz.\n"
-                    msg += f"   👉 Öneri: Fiyatı **{discount_price:.2f} ₺** seviyesine indirin (Maliyetine Satış).\n"
-                else:
-                    msg += f"• **{name}** ({stock} adet): Zaten dip fiyatta. 1 Alana 1 Bedava yapın.\n"
+            if match:
+                idx = match.start()
+                found_matches.append({'pos': idx, 'data': item, 'end': match.end()})
+                # Bulunan yeri maskele
+                temp_text = temp_text[:idx] + "#" * (match.end() - idx) + temp_text[match.end():]
+
+        # 3. FUZZY SEARCH (Eğer hiçbir şey bulunamadıysa)
+        if not found_matches:
+            words = text_lower.split()
+            all_names = {p[1].lower(): (p[0], p[1]) for p in products}
+            
+            for word in words:
+                matches = difflib.get_close_matches(word, all_names.keys(), n=1, cutoff=0.7)
+                if matches:
+                    matched_key = matches[0]
+                    pid, real_name = all_names[matched_key]
                     
-            return msg
-        except Exception as e:
-            return f"Analiz hatası: {str(e)}"
+                    idx = text_lower.find(word)
+                    if idx != -1:
+                        found_matches.append({
+                            'pos': idx, 
+                            'data': {
+                                'key': word,
+                                'id': pid,
+                                'display': real_name,
+                                'len': len(word),
+                                'type': 'fuzzy'
+                            },
+                            'end': idx + len(word)
+                        })
+                        break  # İlk eşleşmeyi al
 
-    # --- ÖZELLİK 3: GELECEK TAHMİNİ (MAKİNE ÖĞRENMESİ) ---
-    def handle_sales_forecast(self):
-        """Linear Regression ile yarınki ciroyu tahmin eder"""
+        if not found_matches:
+            return "⚠️ Mesajda kayıtlı bir ürün ismi veya barkod bulamadım."
+
+        # YEDEK AL
+        affected_ids = [m['data']['id'] for m in found_matches]
+        self.create_backup(affected_ids)
+
+        # Pozisyona göre sırala
+        found_matches.sort(key=lambda x: x['pos'])
+        
+        # 4. HER ÜRÜN İÇİN SADECE KENDİ SEGMENTİNİ İŞLE
+        report = "📝 **İşlem Raporu:**\n"
+        total_actions = 0
+
+        for i in range(len(found_matches)):
+            match = found_matches[i]
+            prod_data = match['data']
+            
+            # Segment başlangıcı: ürün isminin bittiği yer
+            start_scope = match['end']
+            
+            # Segment bitişi: bir sonraki ürün başlangıcı VEYA mesaj sonu
+            if i < len(found_matches) - 1:
+                end_scope = found_matches[i+1]['pos']
+            else:
+                end_scope = len(text_lower)
+
+            # Bu ürüne ait segment
+            segment = text_lower[start_scope:end_scope]
+            
+            # Segmenti işle
+            result = self.parse_segment_and_execute(prod_data['id'], prod_data['display'], segment)
+            
+            if result:
+                report += f"{result}\n"
+                total_actions += 1
+
+        if total_actions > 0:
+            return report + "\n💾 *Veritabanı güncellendi. Hata varsa 'Geri al' diyebilirsin.*"
+        else:
+            return "🤔 Ürünü buldum ama ne yapacağımı anlayamadım."
+
+    def parse_segment_and_execute(self, pid, name, segment):
+        """Segment içindeki sayıları ve komutları analiz eder"""
+        changes = []
+        
+        # --- 1. SİLME ---
+        if any(w in segment for w in ["sil", "kaldır", "uçur", "yok et"]):
+            self.db.delete_product(pid)
+            return f"🗑️ **{name}**: SİLİNDİ."
+
+        # --- 2. YÜZDESEL İŞLEMLER ---
+        percent_match = re.search(r'(?:%|yüzde)\s*([\d.,]+)\s*(zam|artır|ekle|indirim|düş|azalt)', segment)
+        if percent_match:
+            raw_rate = percent_match.group(1)
+            rate = self.extract_number(raw_rate)
+            action = percent_match.group(2)
+            
+            if rate is not None:
+                curr_price = self.db.cursor.execute("SELECT sell_price FROM products WHERE id=?", (pid,)).fetchone()[0]
+                
+                if action in ["zam", "artır", "ekle"]:
+                    new_price = curr_price * (1 + rate / 100)
+                    changes.append(f"Fiyat ➔ {new_price:.2f} ₺ (%{int(rate)} Zam)")
+                else:
+                    new_price = curr_price * (1 - rate / 100)
+                    changes.append(f"Fiyat ➔ {new_price:.2f} ₺ (%{int(rate)} İndirim)")
+                    
+                self.db.update_product_field(pid, "sell_price", new_price)
+
+        # --- 3. STOK İŞLEMLERİ ---
+        stock_patterns = [
+            r'(?:stok|stoğu|adet)(?:u)?(?:nu)?\s+([\d.,]+)\s+(yap|olsun|ekle|artır|azalt|çıkar|düş|değiştir)',
+            r'(?:stok|stoğu|adet)(?:u)?(?:nu)?\s+([\d.,]+)'
+        ]
+        
+        stock_match = None
+        stock_action = "yap"
+        
+        for pattern in stock_patterns:
+            stock_match = re.search(pattern, segment)
+            if stock_match:
+                # Action kelimesi varsa al
+                if len(stock_match.groups()) > 1:
+                    stock_action = stock_match.group(2)
+                break
+        
+        if stock_match:
+            raw_val = stock_match.group(1)
+            val = int(self.extract_number(raw_val))
+            
+            curr = self.db.cursor.execute("SELECT stock FROM products WHERE id=?", (pid,)).fetchone()[0]
+            new_stock = curr
+            
+            if stock_action in ["ekle", "artır"]:
+                new_stock = curr + val
+                changes.append(f"Stok ➔ {new_stock} (+{val})")
+            elif stock_action in ["azalt", "çıkar", "düş"]:
+                new_stock = curr - val
+                changes.append(f"Stok ➔ {new_stock} (-{val})")
+            else:  # yap, olsun, değiştir
+                new_stock = val
+                changes.append(f"Stok ➔ {new_stock} (Ayarlandı)")
+                
+            self.db.update_product_field(pid, "stock", new_stock)
+
+        # --- 4. FİYAT İŞLEMLERİ (DÜZELTME) ---
+        price_patterns = [
+            r'(?:fiyat|fiyatı|fiyatını)\s+([\d.,]+)\s*(?:tl|lira|try)?\s*(?:yap|olsun|değiştir)?',
+            r'([\d.,]+)\s*(?:tl|lira|try)\s*(?:yap|olsun|değiştir)?',
+        ]
+        
+        final_price = None
+        
+        for pattern in price_patterns:
+            price_match = re.search(pattern, segment)
+            if price_match:
+                potential_price = self.extract_number(price_match.group(1))
+                
+                # Bu sayının stok değeri olup olmadığını kontrol et
+                is_stock_value = False
+                if stock_match:
+                    stock_val = self.extract_number(stock_match.group(1))
+                    if potential_price == stock_val:
+                        is_stock_value = True
+                
+                if not is_stock_value:
+                    final_price = potential_price
+                    break
+
+        if final_price is not None:
+            self.db.update_product_field(pid, "sell_price", final_price)
+            changes.append(f"Fiyat ➔ {final_price:.2f} ₺")
+
+        # --- 5. KRİTİK STOK ---
+        crit_match = re.search(r'(?:kritik)\s*(?:stok)?(?:u)?(?:ğu)?\s+([\d.,]+)', segment)
+        if crit_match:
+            c_val = int(self.extract_number(crit_match.group(1)))
+            self.db.update_product_field(pid, "critical_stock", c_val)
+            changes.append(f"Kritik Limit ➔ {c_val}")
+
+        # --- 6. MALİYET ---
+        cost_match = re.search(r'(?:maliyet|maliyeti|maliyetini)\s+([\d.,]+)', segment)
+        if cost_match:
+            c_cost = self.extract_number(cost_match.group(1))
+            self.db.update_product_field(pid, "cost_price", c_cost)
+            changes.append(f"Maliyet ➔ {c_cost:.2f} ₺")
+
+        if changes:
+            return f"✅ **{name}**: " + ", ".join(changes)
+        return None
+
+    # ============================================================
+    # 📊 YENİ ÖZELLİKLER: STOK TAKİP & SİPARİŞ
+    # ============================================================
+
+    def generate_stock_report(self):
+        """Detaylı stok raporu"""
         try:
-            query = """
-                SELECT sale_date, SUM(total_amount) as daily_total 
-                FROM sales 
-                GROUP BY sale_date 
-                ORDER BY sale_date ASC 
-                LIMIT 60
-            """
-            df = pd.read_sql(query, self.db.conn)
+            # 1. Kritik stok altındakiler
+            critical = self.db.cursor.execute("""
+                SELECT name, stock, critical_stock 
+                FROM products 
+                WHERE stock <= critical_stock
+                ORDER BY stock ASC
+            """).fetchall()
             
-            if len(df) < 5:
-                return "⚠️ Tahmin için en az 5 günlük veri lazım."
-
-            # Tarihleri sayısal veriye çevir
-            df['date_ordinal'] = pd.to_datetime(df['sale_date']).map(datetime.datetime.toordinal)
+            # 2. Tükenmek üzere olanlar
+            low_stock = self.db.cursor.execute("""
+                SELECT name, stock, critical_stock 
+                FROM products 
+                WHERE stock > critical_stock AND stock <= critical_stock * 1.5
+                ORDER BY stock ASC
+            """).fetchall()
             
-            X = df['date_ordinal'].values.reshape(-1, 1)
-            y = df['daily_total'].values
+            # 3. Bol stoklu ürünler
+            high_stock = self.db.cursor.execute("""
+                SELECT name, stock, critical_stock 
+                FROM products 
+                WHERE stock > critical_stock * 3
+                ORDER BY stock DESC
+                LIMIT 5
+            """).fetchall()
             
-            model = LinearRegression()
-            model.fit(X, y)
+            report = "📊 **STOK DURUMU RAPORU**\n\n"
             
-            # Yarını hesapla
-            tomorrow = datetime.date.today() + datetime.timedelta(days=1)
-            tomorrow_ordinal = np.array([[tomorrow.toordinal()]])
-            prediction = model.predict(tomorrow_ordinal)[0]
+            # Kritik durum
+            if critical:
+                report += "🔴 **ACİL SİPARİŞ GEREKLİ:**\n"
+                for name, stock, crit in critical:
+                    shortage = crit * 2 - stock
+                    report += f"   • {name}: {stock} adet (Min: {crit}) → **{shortage} adet sipariş verin**\n"
+                report += "\n"
             
-            trend = "Yükseliş 📈" if model.coef_[0] > 0 else "Düşüş 📉"
+            # Düşük stok
+            if low_stock:
+                report += "🟡 **YAKINDA BİTECEKLER:**\n"
+                for name, stock, crit in low_stock:
+                    report += f"   • {name}: {stock} adet (Min: {crit})\n"
+                report += "\n"
             
-            return f"🔮 **AI Ciro Tahmini (Yarın):**\nBeklenen: **{max(0, prediction):.2f} ₺**\nTrend: **{trend}**"
+            # Bol stok
+            if high_stock:
+                report += "🟢 **BOL STOKLU ÜRÜNLER:**\n"
+                for name, stock, crit in high_stock:
+                    report += f"   • {name}: {stock} adet\n"
+            
+            if not critical and not low_stock:
+                report += "✅ Tüm ürünler yeterli stokta!"
+            
+            return report
             
         except Exception as e:
-            return f"Tahmin hatası: {str(e)}"
+            return f"Stok raporu hatası: {str(e)}"
 
-    # --- DİĞER STANDART FONKSİYONLAR ---
-    def handle_cross_sell(self, product_name):
-        if not product_name: return "Hangi ürün için öneri istiyorsun? (Örn: 'Viski yanına ne gider?')"
+    def generate_order_suggestion(self):
+        """Satış verilerine göre sipariş önerisi"""
+        try:
+            # Son 30 günde satılan ürünleri analiz et
+            query = """
+                SELECT 
+                    si.product_name,
+                    SUM(si.quantity) as total_sold,
+                    p.stock,
+                    p.critical_stock
+                FROM sale_items si
+                JOIN products p ON si.product_name = p.name
+                WHERE si.sale_date >= date('now', '-30 days')
+                GROUP BY si.product_name
+                ORDER BY total_sold DESC
+            """
+            data = self.db.cursor.execute(query).fetchall()
+            
+            if not data:
+                return "📦 Son 30 günde satış verisi yok."
+            
+            report = "🛒 **SİPARİŞ ÖNERİLERİ (Son 30 Gün Bazlı):**\n\n"
+            
+            for name, total_sold, stock, crit in data:
+                # Günlük ortalama satış
+                daily_avg = total_sold / 30
+                
+                # Kaç günlük stok kaldı?
+                if daily_avg > 0:
+                    days_left = stock / daily_avg
+                else:
+                    days_left = 999
+                
+                # Önerilen sipariş miktarı (2 haftalık)
+                suggested_order = int(daily_avg * 14)
+                
+                if days_left < 7:
+                    urgency = "🔴 ACİL"
+                    report += f"{urgency} **{name}**\n"
+                    report += f"   • Kalan: {stock} adet (~{int(days_left)} gün)\n"
+                    report += f"   • Günlük satış: {daily_avg:.1f} adet\n"
+                    report += f"   • **ÖNERİ: {suggested_order} adet sipariş verin**\n\n"
+                elif days_left < 14:
+                    urgency = "🟡 DİKKAT"
+                    report += f"{urgency} **{name}**\n"
+                    report += f"   • Kalan: {stock} adet (~{int(days_left)} gün)\n"
+                    report += f"   • **ÖNERİ: {suggested_order} adet sipariş verin**\n\n"
+            
+            return report
+            
+        except Exception as e:
+            return f"Sipariş önerisi hatası: {str(e)}"
+
+    def generate_sales_trend(self, days=30):
+        """En çok satan ürünler"""
         try:
             query = f"""
-                SELECT product_name, COUNT(*) as cnt 
-                FROM sale_items 
-                WHERE sale_id IN (SELECT sale_id FROM sale_items WHERE product_name = '{product_name}') 
-                AND product_name != '{product_name}'
-                GROUP BY product_name ORDER BY cnt DESC LIMIT 3
+                SELECT 
+                    product_name,
+                    SUM(quantity) as total_qty,
+                    SUM(total_price) as total_revenue,
+                    COUNT(DISTINCT sale_id) as transaction_count
+                FROM sale_items
+                WHERE sale_date >= date('now', '-{days} days')
+                GROUP BY product_name
+                ORDER BY total_revenue DESC
+                LIMIT 10
             """
-            results = self.db.cursor.execute(query).fetchall()
-            if not results: return f"ℹ️ **{product_name}** için henüz yeterli veri yok."
+            data = self.db.cursor.execute(query).fetchall()
             
-            msg = f"💡 **{product_name}** alanlar şunları da alıyor:\n"
-            for prod, qty in results: msg += f"• {prod} ({qty} kez)\n"
-            return msg
-        except: return "Öneri oluşturulamadı."
+            if not data:
+                return f"📊 Son {days} günde satış verisi yok."
+            
+            report = f"📈 **EN ÇOK SATAN ÜRÜNLER (Son {days} Gün):**\n\n"
+            
+            for i, (name, qty, revenue, tx_count) in enumerate(data, 1):
+                avg_per_sale = revenue / tx_count if tx_count > 0 else 0
+                report += f"{i}. **{name}**\n"
+                report += f"   • Satılan: {int(qty)} adet\n"
+                report += f"   • Ciro: {revenue:.2f} ₺\n"
+                report += f"   • İşlem Sayısı: {tx_count}\n"
+                report += f"   • Ortalama: {avg_per_sale:.2f} ₺/işlem\n\n"
+            
+            return report
+            
+        except Exception as e:
+            return f"Satış trendi hatası: {str(e)}"
+
+    # ============================================================
+    # 📦 DİĞER FONKSİYONLAR
+    # ============================================================
+
+    def process_category_assignment(self, text):
+        """Barkod veya isim ile kategori ataması"""
+        try:
+            text_lower = text.lower()
+            
+            category = self.extract_category(text)
+            if not category:
+                return "⚠️ Hangi kategoriye ekleyeceğinizi belirtmediniz."
+            
+            products = self.db.cursor.execute("SELECT id, name, barcode FROM products").fetchall()
+            target_product = None
+            
+            # Barkod araması
+            barcode_match = re.search(r'\b(\d{8,13})\b', text)
+            if barcode_match:
+                barcode = barcode_match.group(1)
+                result = self.find_product_by_barcode(barcode)
+                if result:
+                    target_product = result
+            
+            # İsim araması
+            if not target_product:
+                all_names = [p[1] for p in products]
+                for name in all_names:
+                    if name.lower() in text_lower:
+                        pid = self.db.cursor.execute("SELECT id FROM products WHERE name=?", (name,)).fetchone()[0]
+                        target_product = (pid, name)
+                        break
+                
+                # Fuzzy search
+                if not target_product:
+                    words = text_lower.split()
+                    for word in words:
+                        matches = difflib.get_close_matches(word, all_names, n=1, cutoff=0.6)
+                        if matches:
+                            matched_name = matches[0]
+                            pid = self.db.cursor.execute("SELECT id FROM products WHERE name=?", (matched_name,)).fetchone()[0]
+                            target_product = (pid, matched_name)
+                            break
+            
+            if target_product:
+                pid, name = target_product
+                self.db.update_product_field(pid, "category", category)
+                return f"✅ **{name}** ➔ **{category}** grubuna eklendi."
+            else:
+                return "⚠️ Ürün bulunamadı."
+                
+        except Exception as e:
+            return f"Kategori atama hatası: {str(e)}"
+
+    def process_new_product(self, text):
+        """Yeni Ürün Ekleme"""
+        try:
+            text_lower = text.lower()
+            
+            # Barkod
+            barcode_match = re.search(r'(?:barkod|kod)[:\s]*(\d{8,13})', text_lower)
+            barcode = barcode_match.group(1) if barcode_match else None
+            
+            if barcode:
+                existing = self.db.cursor.execute("SELECT id FROM products WHERE barcode=?", (barcode,)).fetchone()
+                if existing:
+                    return f"❌ Bu barkod ({barcode}) zaten kayıtlı!"
+            
+            # İsim
+            name_match = re.search(r'(?:ekle|oluştur|isim)[:\s]+(.*?)(?:,|$|\s(?:fiyat|stok|barkod|kategori|maliyet|kritik))', text_lower)
+            if not name_match:
+                if barcode:
+                    return f"⚠️ Barkod ({barcode}) için bir ürün ismi belirtmediniz."
+                return "⚠️ Ürün adını anlayamadım."
+            
+            name = name_match.group(1).strip().title()
+            
+            # Fiyat
+            price_match = re.search(r'(?:fiyatı|fiyat)[:\s]*([\d.,]+)', text_lower)
+            sell_price = self.extract_number(price_match.group(1)) if price_match else 0.0
+            
+            # Stok
+            stock_match = re.search(r'(?:stoğu|stok)[:\s]*([\d.,]+)', text_lower)
+            stock = int(self.extract_number(stock_match.group(1))) if stock_match else 0
+            
+            # Kritik Stok
+            crit_match = re.search(r'(?:kritik)\s*(?:stok)?[:\s]*([\d.,]+)', text_lower)
+            critical_stock = int(self.extract_number(crit_match.group(1))) if crit_match else 5
+            
+            # Maliyet
+            cost_match = re.search(r'(?:maliyet)[:\s]*([\d.,]+)', text_lower)
+            cost_price = self.extract_number(cost_match.group(1)) if cost_match else 0.0
+            
+            # Kategori
+            category = self.extract_category(text_lower) or "Genel"
+
+            self.db.insert_product(
+                name, 
+                cost_price, 
+                sell_price, 
+                stock, 
+                category, 
+                barcode, 
+                "",
+                critical_stock
+            )
+            
+            result = f"✅ **Eklendi:** {name}\n"
+            if barcode:
+                result += f"🔢 Barkod: {barcode}\n"
+            result += f"📂 Kategori: {category}\n"
+            result += f"💰 Fiyat: {sell_price:.2f} ₺\n"
+            result += f"💸 Maliyet: {cost_price:.2f} ₺\n"
+            result += f"📦 Stok: {stock}\n"
+            result += f"⚠️ Kritik Stok: {critical_stock}"
+            
+            return result
+            
+        except Exception as e:
+            return f"Ekleme hatası: {str(e)}"
+
+    def create_backup(self, product_ids):
+        """Değişiklik öncesi verileri yedekle"""
+        self.last_backup = {}
+        if not product_ids: return
+        placeholders = ','.join(['?'] * len(product_ids))
+        query = f"SELECT id, sell_price, stock, critical_stock, cost_price, name, category FROM products WHERE id IN ({placeholders})"
+        rows = self.db.cursor.execute(query, product_ids).fetchall()
+        for row in rows:
+            self.last_backup[row[0]] = {
+                'sell_price': row[1], 
+                'stock': row[2], 
+                'critical_stock': row[3], 
+                'cost_price': row[4], 
+                'name': row[5],
+                'category': row[6]
+            }
+
+    def restore_backup(self):
+        """Son işlemi geri al"""
+        if not self.last_backup: 
+            return "⚠️ Geri alınacak işlem yok."
+        
+        names = []
+        for pid, data in self.last_backup.items():
+            self.db.cursor.execute("""
+                UPDATE products 
+                SET sell_price=?, stock=?, critical_stock=?, cost_price=?, category=? 
+                WHERE id=?
+            """, (data['sell_price'], data['stock'], data['critical_stock'], 
+                  data['cost_price'], data['category'], pid))
+            names.append(data['name'])
+        
+        self.db.conn.commit()
+        self.last_backup = {}
+        return f"✅ İşlem geri alındı: {', '.join(names)}"
+
+    def process_sales_query(self, text):
+        """Satış Raporu"""
+        try:
+            products = self.db.cursor.execute("SELECT name FROM products").fetchall()
+            all_names = [p[0] for p in products]
+            
+            target_product = None
+            
+            for name in all_names:
+                if name.lower() in text:
+                    target_product = name
+                    break
+            
+            if not target_product:
+                words = text.split()
+                for word in words:
+                    matches = difflib.get_close_matches(word, all_names, n=1, cutoff=0.6)
+                    if matches:
+                        target_product = matches[0]
+                        break
+            
+            if target_product:
+                today = str(datetime.date.today())
+                res = self.db.cursor.execute(
+                    "SELECT SUM(quantity), SUM(total_price) FROM sale_items WHERE product_name=? AND sale_date=?", 
+                    (target_product, today)
+                ).fetchone()
+                
+                qty = res[0] if res[0] else 0
+                revenue = res[1] if res[1] else 0.0
+                return f"📊 **{target_product}** Bugün Raporu:\n📦 Satılan: {qty} Adet\n💰 Ciro: {revenue:.2f} ₺"
+            else:
+                return "Hangi ürünün satışını sorduğunu anlayamadım."
+        except Exception as e:
+            return f"Rapor hatası: {str(e)}"
 
     def handle_ciro_query(self):
+        """Günlük ciro sorgula"""
         today = str(datetime.date.today())
         res = self.db.cursor.execute("SELECT SUM(total_amount) FROM sales WHERE sale_date=?", (today,)).fetchone()
         val = res[0] if res[0] else 0.0
-        return f"💰 Bugün şu ana kadar **{val:.2f} ₺** ciro yaptık."
-
-    def handle_stock_query(self, product_name):
-        if product_name:
-            res = self.db.cursor.execute("SELECT stock FROM products WHERE name=?", (product_name,)).fetchone()
-            if res: return f"📦 **{product_name}** stoğu: {res[0]} adet."
-            return f"❌ {product_name} bulunamadı."
-        return "Hangi ürünün stoğunu merak ediyorsun?"
+        return f"💰 Bugün Toplam Ciro: **{val:.2f} ₺**"
 
     def show_help(self):
+        """Yardım menüsü"""
         return """
-🧠 **Void AI Gelişmiş Komutlar:**
+🤖 **Void AI Komutları:**
 
-📊 **Analiz:**
-- "ABC analizi yap" (Ürünleri önem sırasına dizer)
-- "Gün sonu tahmini" (Bugün kaçla kapatırız?)
+**📝 Ürün Güncelleme:**
+• 'J&B fiyat 1250 yap'
+• 'Marlboro stoğu 5 artır'
+• '8690504000014 stoğu 10 azalt'
+• 'Red Label kritik stoğu 5 yap'
+• 'Viski maliyeti 800 yap'
 
-🔮 **Tahmin & Güvenlik:**
-- "Yarın ciro ne olur?"
-- "Anomali var mı?"
+**🆕 Yeni Ürün:**
+• 'Yeni ürün ekle: Çikolata fiyat 50 stok 100 barkod 123456789012'
 
-📦 **Stok & Satış:**
-- "Ölü stoklar neler?"
-- "Viski yanına ne gider?"
-- "Bugünkü ciro"
+**📂 Kategori:**
+• '8690504000014 viski grubuna ekle'
+
+**📊 Raporlar:**
+• 'Stok raporu' - Detaylı stok durumu
+• 'Ne sipariş vermeliyim' - Sipariş önerileri
+• 'En çok satan ürünler' - Satış trendleri
+• 'Bugün ne kadar sattık?'
+
+**↩️ Geri Alma:**
+• 'Geri al'
         """
 
 class AIChatDialog(QDialog):    
@@ -2871,9 +3370,7 @@ class AIChatDialog(QDialog):
         
         layout.addLayout(input_layout)
 
-    # ... (Sınıfın geri kalan fonksiyonları add_message ve send_message aynı kalacak) ...
     def add_message(self, sender, text, is_html=False):
-        # ... (Eski kodunuzdaki gibi) ...
         color = "#0a84ff" if sender == "Void AI" else "#30d158"
         align = "left" if sender == "Void AI" else "right"
         bg_color = "#2a2a2a" if sender == "Void AI" else "#1e3a2a"
@@ -2900,69 +3397,65 @@ class AIChatDialog(QDialog):
         QApplication.processEvents()
         
         try:
-            # VoidAI_NLP sınıfını kullanıyoruz
             response = self.ai_engine.generate_response(msg)
             self.add_message("Void AI", response, is_html=True)
+            
+            if "✅" in response or "📝" in response or "SİLİNDİ" in response:
+                if self.parent():
+                    self.parent().refresh_after_ai()
         except Exception as e:
             self.add_message("Void AI", f"⚠️ Hata: {str(e)}")
 
 class VoidAI_Engine:
-    def __init__(self, csv_yolu="urunler_klasoru/urunler.csv"):
-        self.csv_yolu = csv_yolu
-
-    def verileri_oku(self):
-        """CSV dosyasını okur ve bir liste olarak döndürür."""
-        if not os.path.exists(self.csv_yolu):
-            return []
-        
-        veriler = []
-        try:
-            with open(self.csv_yolu, mode='r', encoding='utf-8-sig') as file:
-                reader = csv.DictReader(file)
-                for row in reader:
-                    veriler.append(row)
-        except Exception as e:
-            print(f"CSV Okuma Hatası: {e}")
-        return veriler
+    """
+    Arka planda çalışan Analiz Motoru (CSV yerine doğrudan DB kullanır)
+    """
+    def __init__(self, db_path):
+        self.db_path = db_path
 
     def tum_analizleri_yap(self):
-        """Stok ve kritik seviye analizi yapar."""
-        urunler = self.verileri_oku()
+        """Kritik stok ve ölü stok analizi yapar"""
         oneriler = []
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # 1. KRİTİK STOK ANALİZİ
+            # Stoğu, kritik seviyenin altına düşenleri bul
+            query_kritik = "SELECT id, name, stock, critical_stock FROM products WHERE stock <= critical_stock"
+            kritik_urunler = cursor.execute(query_kritik).fetchall()
+            
+            for uid, name, stock, crit in kritik_urunler:
+                eksik = (crit * 2) - stock # Hedeflenen stok miktarı
+                oneriler.append({
+                    "tur": "KRITIK",
+                    "mesaj": f"⚠️ KRİTİK STOK: {name} (Kalan: {stock}) -> {eksik} adet sipariş verilmeli."
+                })
 
-        if not urunler:
+            # 2. ÖLÜ STOK ANALİZİ (Hiç satılmayanlar)
+            # Stoğu var ama son 30 gündür satılmamış
+            query_olu = """
+                SELECT name, stock, sell_price FROM products 
+                WHERE stock > 5 
+                AND name NOT IN (
+                    SELECT DISTINCT product_name FROM sale_items 
+                    WHERE sale_date >= date('now', '-30 days')
+                )
+            """
+            olu_urunler = cursor.execute(query_olu).fetchall()
+            
+            for name, stock, price in olu_urunler:
+                oneriler.append({
+                    "tur": "OLU",
+                    "mesaj": f"❄️ ÖLÜ STOK: {name} ({stock} adet) 30 gündür satılmadı. İndirim yapın."
+                })
+
+            conn.close()
+        except Exception as e:
+            print(f"Analiz Hatası: {e}")
             return []
 
-        for urun in urunler:
-            try:
-                u_id = urun.get('id')
-                ad = urun.get('name') or urun.get('urun_adi', 'Bilinmeyen')
-                
-                # Veri tiplerini güvenli çevir
-                try: stok = int(float(urun.get('stock', 0)))
-                except: stok = 0
-                
-                try: kritik = int(float(urun.get('critical_stock', 5)))
-                except: kritik = 5
-
-                # --- KURAL: KRİTİK STOK ANALİZİ ---
-                if stok <= kritik:
-                    eksik = (kritik * 3) - stok 
-                    oneriler.append({
-                        "tur": "SIPARIS",
-                        "mesaj": f"📦 STOK ALARMI: {ad} kritik seviyede (Stok: {stok}).",
-                        "aksiyon_verisi": {"id": u_id, "islem": "mail_at", "miktar": eksik}
-                    })
-
-            except Exception as e:
-                continue 
-
         return oneriler
-
-    def aksiyonu_uygula(self, aksiyon_verisi):
-        if aksiyon_verisi.get("islem") == "mail_at":
-            return f"Sipariş listesine {aksiyon_verisi['miktar']} adet eklendi. ✅"
-        return "İşlem uygulandı."
 
 class AIWorker(QThread):
     finished = Signal(list)  # Sonuçları ana ekrana taşıyan sinyal
@@ -3154,6 +3647,42 @@ class VoidPOS(QMainWindow):
         main_lay.addWidget(right_container)
         
         self.load_categories_grid()
+
+
+    def refresh_after_ai(self):
+        """AI işlem yaptıktan sonra tüm sistemi (Sepet + Grid + Ciro) yeniler"""
+        print("🔄 AI sonrası sistem yenileniyor...")
+        
+        # 1. Sepetlerdeki ürünlerin fiyatlarını güncelle
+        self.update_cart_prices_live()
+        
+        # 2. Ürün listesini (Grid) yenile (Eğer bir kategorideyse)
+        if self.current_category:
+            self.load_products_grid(self.current_category)
+        else:
+            self.load_categories_grid()
+            
+        # 3. Ciroyu yenile
+        self.update_ciro()
+
+    def update_cart_prices_live(self):
+        for i in range(self.cart_tabs.count()):
+            table = self.cart_tabs.widget(i)
+            
+            for row in range(table.rowCount()):
+                item_name_widget = table.item(row, 0)
+                if not item_name_widget: continue
+                
+                item_name = item_name_widget.text()
+                res = self.db.cursor.execute("SELECT sell_price FROM products WHERE name=?", (item_name,)).fetchone()
+                
+                if res:
+                    new_price = res[0]
+                    table.item(row, 1).setText(f"{new_price:.2f}")
+            if hasattr(table, 'recalc_total'): # Eğer böyle bir metot varsa
+                table.recalc_total()
+            elif i == self.cart_tabs.currentIndex(): # Yoksa manuel hesapla
+                self.recalc_active_cart_total()
 
     def open_product_detail_popup(self, product_name):
         """Ürün detay/düzenleme penceresini açar"""
@@ -5422,7 +5951,7 @@ class AdminDialog(QDialog):
             
 class ProductDetailDialog(QDialog):
     def __init__(self, db, product_name, parent=None):
-        super().__init__(parent)
+        super().__ini__(parent)
         self.db = db
         self.p_name = product_name
         # Ürün verisini çek
@@ -5601,7 +6130,7 @@ if __name__ == "__main__":
     font = QFont(".AppleSystemUIFont", 13) 
     app.setFont(font)    
     
-    app.setStyleSheet(theme_manager.get_stylesheet()) 
+    app.setStyleSheet(theme_manager.get_stylesheet())
 
     window = VoidPOS()
     window.show()
