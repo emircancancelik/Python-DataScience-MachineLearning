@@ -842,11 +842,10 @@ class IngenicoRealDriver:
             return {"success": False, "message": "Cihazdan yanıt dosyası oluşmadı."}
 
         try:
-            tree = import_xml_etree(self.res_path) # Helper gerekebilir veya direkt ET
             import xml.etree.ElementTree as ET
+            
             tree = ET.parse(self.res_path)
             root = tree.getroot()
-
             response_code = root.findtext(".//ResponseCode")
             message = root.findtext(".//Message")
             auth_code = root.findtext(".//AuthCode")
@@ -856,9 +855,9 @@ class IngenicoRealDriver:
             if response_code in ["00", "OK"]:
                 return {
                     "success": True,
-                    "auth_code": auth_code,
-                    "rrn": rrn,
-                    "message": message
+                    "auth_code": auth_code or "OK",
+                    "rrn": rrn or "",
+                    "message": message or "İşlem Başarılı"
                 }
             else:
                 return {
