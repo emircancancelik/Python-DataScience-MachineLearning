@@ -695,43 +695,18 @@ class POSType(Enum):
     AUTO_DETECT = "auto"
 
 class UniversalPOSManager:
-    """Gerçek POS Yöneticisi"""
+    """
+    Gerçek POS Yöneticisi (FIXED)
+    Market bilgisayarındaki byte'ları yönetir.
+    """
     
     def __init__(self):
         self.logger = logging.getLogger("UniversalPOS")
-        # Ayarları yükle (Yukarıdaki güncel load_pos_config'den gelecek)
-        self.config = load_pos_config() 
-        self.driver = IngenicoRealDriver()
-    
-    def process_payment(self, amount: float, payment_type: str = "CARD") -> dict:
-        tx_id = str(uuid.uuid4())[:8]
-        # IP ve Port bilgisini logda görelim
-        target_ip = self.config.get('primary_ip')
-        target_port = self.config.get('primary_port')
+        self.config = load_pos_config()
         
-        self.logger.info(f"TX:{tx_id} | Hedef: {target_ip}:{target_port} | Tutar: {amount:.2f}")
-        
-        try:
-            result = self.driver.send_transaction(amount, payment_type)
-            
-            if result['success']:
-                return {
-                    'success': True,
-                    'method': payment_type,
-                    'amount': amount,
-                    'auth_code': result.get('auth_code', 'OK'),
-                    'tx_id': tx_id,
-                    'message': result.get('message', 'Onaylandı')
-                }
-            else:
-                return {
-                    'success': False,
-                    'method': payment_type,
-                    'message': result.get('message', 'Reddedildi'),
-                    'tx_id': tx_id
-                }
-        except Exception as e:
-            return {'success': False, 'message': str(e), 'tx_id': tx_id}    
+        # HATA ÇÖZÜMÜ: Sürücüyü 'self.real_driver' ismiyle başlatıyoruz
+        # (Eğer hata alıyorsanız, IngenicoRealDriver sınıfının en üstte tanımlı olduğundan emin olun)
+        self.real_driver = IngenicoRealDriver() 
     
     def process_payment(self, amount: float, payment_type: str = "CARD") -> dict:
         """
@@ -739,15 +714,11 @@ class UniversalPOSManager:
         payment_type: "CARD" veya "CASH"
         """
         tx_id = str(uuid.uuid4())[:8]
-        self.logger.info(f"💳 ÖDEME BAŞLADI | {payment_type} | {amount:.2f} TL | TX:{tx_id}")
+        self.logger.info(f"TX:{tx_id} | {payment_type} | {amount:.2f} TL")
         
         try:
-            # Tip dönüşümü: IngenicoDriver 0 (Nakit) ve 1 (Kart) bekliyor
-            p_type_int = 0 if payment_type == "CASH" else 1
-            
-            # --- GERÇEK CİHAZA GÖNDERME ANI ---
-            result = self.real_driver.send_transaction(amount, p_type_int)
-            # ----------------------------------
+            # HATA ÇÖZÜMÜ: Yukarıda tanımladığımız 'self.real_driver'ı kullanıyoruz
+            result = self.real_driver.send_transaction(amount, payment_type)
             
             if result['success']:
                 return {
@@ -756,68 +727,23 @@ class UniversalPOSManager:
                     'amount': amount,
                     'auth_code': result.get('auth_code', 'OK'),
                     'receipt_no': result.get('rrn', tx_id),
-                    'card_number': '****', # Gerçek cihaz güvenlik gereği bunu dönmeyebilir
+                    'card_number': '****', 
                     'tx_id': tx_id,
                     'message': result.get('message', 'İşlem Başarılı')
                 }
             else:
-                self.logger.warning(f"İşlem Başarısız: {result['message']}")
                 return {
                     'success': False,
                     'method': payment_type,
-                    'message': result.get('message', 'Bilinmeyen Hata'),
+                    'message': result.get('message', 'İşlem Başarısız'),
                     'tx_id': tx_id
                 }
                 
         except Exception as e:
-            self.logger.exception("Kritik Ödeme Hatası")
+            self.logger.exception("Ödeme hatası")
             return {
                 'success': False,
-                'message': f'Sistem Hatası: {str(e)}',
-                'tx_id': tx_id
-            }
-    
-    def process_payment(self, amount: float, payment_type: str = "CARD") -> dict:
-        """
-        Ödeme işlemini başlatır ve sonucu döner.
-        payment_type: "CARD" veya "CASH"
-        """
-        tx_id = str(uuid.uuid4())[:8]
-        self.logger.info(f"💳 ÖDEME BAŞLADI | {payment_type} | {amount:.2f} TL | TX:{tx_id}")
-        
-        try:
-            # Tip dönüşümü: IngenicoDriver 0 (Nakit) ve 1 (Kart) bekliyor
-            p_type_int = 0 if payment_type == "CASH" else 1
-            
-            # --- GERÇEK CİHAZA GÖNDERME ANI ---
-            result = self.real_driver.send_transaction(amount, p_type_int)
-            # ----------------------------------
-            
-            if result['success']:
-                return {
-                    'success': True,
-                    'method': payment_type,
-                    'amount': amount,
-                    'auth_code': result.get('auth_code', 'OK'),
-                    'receipt_no': result.get('rrn', tx_id),
-                    'card_number': '****', # Gerçek cihaz güvenlik gereği bunu dönmeyebilir
-                    'tx_id': tx_id,
-                    'message': result.get('message', 'İşlem Başarılı')
-                }
-            else:
-                self.logger.warning(f"İşlem Başarısız: {result['message']}")
-                return {
-                    'success': False,
-                    'method': payment_type,
-                    'message': result.get('message', 'Bilinmeyen Hata'),
-                    'tx_id': tx_id
-                }
-                
-        except Exception as e:
-            self.logger.exception("Kritik Ödeme Hatası")
-            return {
-                'success': False,
-                'message': f'Sistem Hatası: {str(e)}',
+                'message': f'Hata: {str(e)}',
                 'tx_id': tx_id
             }
         
