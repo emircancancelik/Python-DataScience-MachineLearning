@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QComboBox, QProgressDialog, QTabWidget, QMenu, QInputDialog,
                                QSplitter, QAbstractItemView, QButtonGroup, QSizePolicy, QGroupBox,
                                QDoubleSpinBox, QFileDialog,QStackedWidget,QColorDialog, QTextEdit)
-from PySide6.QtCore import Qt, QThread, Signal, QTimer, QEvent
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QEvent, QSettings
 from PySide6.QtGui import QFont, QCursor, QPixmap, QColor
 
 # =====================================================
@@ -52,7 +52,12 @@ SHOP_NAME = "BAYİÇ ALCOHOL CENTER"
 ADMIN_USER = "admin"
 ADMIN_PASS = "123456"
 
-
+def get_app_path():
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    else:
+        return os.path.dirname(os.path.abspath(__file__))
+    
 class IngenicoGMP:
     """
     Ingenico Move 5000F - Gerçek GMP3 Entegrasyonu
@@ -695,18 +700,27 @@ class POSType(Enum):
     AUTO_DETECT = "auto"
 
 class UniversalPOSManager:
-    """
-    Gerçek POS Yöneticisi (FIXED)
-    Market bilgisayarındaki byte'ları yönetir.
-    """
+
     
     def __init__(self):
-        self.logger = logging.getLogger("UniversalPOS")
-        self.config = load_pos_config()
+        self.base_path = get_app_path()
         
-        # HATA ÇÖZÜMÜ: Sürücüyü 'self.real_driver' ismiyle başlatıyoruz
-        # (Eğer hata alıyorsanız, IngenicoRealDriver sınıfının en üstte tanımlı olduğundan emin olun)
-        self.real_driver = IngenicoRealDriver() 
+        possible_paths = [
+            os.path.join(self.base_path, "ixirYazarkasa.exe"),
+            os.path.join(self.base_path, "libs", "ixirYazarkasa.exe")
+        ]
+        
+        self.exe_path = None
+        for path in possible_paths:
+            if os.path.exists(path):
+                self.exe_path = path
+                break
+        
+        self.req_path = os.path.join(self.base_path, "GMP.XML")
+        self.res_path = os.path.join(self.base_path, "GMP_RESPONSE.XML")
+        
+        if not self.exe_path:
+            print(f"⚠️ UYARI: ixirYazarkasa.exe bulunamadı!\nAranan yerler:\n1. {possible_paths[0]}\n2. {possible_paths[1]}")
     
     def process_payment(self, amount: float, payment_type: str = "CARD") -> dict:
         """
@@ -1989,7 +2003,6 @@ class CategoryCard(QFrame):
             icon_text = "+"
             
         else:
-            # 3. NORMAL KATEGORİ (Koyu Gri)
             self.setStyleSheet("""
                 QFrame {
                     background-color: #252525;
@@ -2005,7 +2018,6 @@ class CategoryCard(QFrame):
             text_color = "#e0e0e0"
             icon_text = name[0].upper() if name else "?"
 
-        # İçerik Düzeni
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 15, 10, 15)
         layout.setSpacing(5)
@@ -2233,9 +2245,46 @@ class VoidBrain_Analytic:
             return report
         except: return "Tahmin hatası."
 
-    # ============================================================
-    # 5. ESKİ TEMEL FONKSİYONLAR (Korundu ve Optimize Edildi)
-    # ============================================================
+
+    def segment_customers(self):
+        try:
+            conn = self.get_connection()
+            # Her bir fişin toplam tutarını çek
+            df = pd.read_sql("SELECT total_amount FROM sales", conn)
+            conn.close()
+
+            if len(df) < 10: 
+                return "⚠️ Yetersiz Veri: Segmentasyon için en az 10 satış gerekiyor."
+
+            # K-Means Algoritması
+            kmeans = KMeans(n_clusters=3, random_state=42, n_init=10)
+            df['cluster'] = kmeans.fit_predict(df[['total_amount']])
+            
+            # Kümelerin ortalama harcamasını bul
+            centers = df.groupby('cluster')['total_amount'].mean().sort_values()
+            
+            # Grupları isimlendir (Ortalamaya göre Küçük -> Büyük)
+            labels = ["Küçük Sepetler", "Standart Müşteri", "VIP / Toptan"]
+            sorted_indices = centers.index.tolist()
+            
+            summary = "📊 **Müşteri Sepet Analizi (K-Means):**\n\n"
+            
+            for i, cluster_idx in enumerate(sorted_indices):
+                # Bu kümedeki eleman sayısı
+                count = len(df[df['cluster'] == cluster_idx])
+                # Bu kümenin ortalaması
+                avg = centers[cluster_idx]
+                
+                label = labels[i] if i < 3 else f"Grup {i}"
+                
+                summary += f"🛒 **{label}:**\n"
+                summary += f"   • İşlem Sayısı: {count}\n"
+                summary += f"   • Ort. Harcama: {avg:.2f} TL\n\n"
+                
+            return summary
+        except Exception as e:
+            return f"Segmentasyon Hatası: {str(e)}"
+        
     def recommend_next_product(self, current_cart_items):
         if not current_cart_items: return None
         try:
@@ -2308,10 +2357,6 @@ class VoidAI_NLP:
             "anomali": ["anomali", "hata", "kaçak", "tuhaflık"],
             "yardim": ["yardım", "ne yapabilirsin", "komutlar"],
         }
-
-    # ============================================================
-    # 🛠️ YARDIMCI ARAÇLAR
-    # ============================================================
     
     def detect_intent(self, user_msg):
         """Kullanıcının genel niyetini algılar"""
@@ -3221,17 +3266,41 @@ class VoidAI_Engine:
             return []
         return oneriler
 
+# ============================================================
+# 4. GÜNCELLENMİŞ AI WORKER (Performans Ayarlı)
+# ============================================================
 class AIWorker(QThread):
-    finished = Signal(list)  
-    def __init__(self, db_path): # ARTIK DB PATH ALIYOR
+    finished = Signal(list)
+    
+    def __init__(self, db_path):
         super().__init__()
         self.db_path = db_path
 
     def run(self):
         if os.path.exists(self.db_path):
-            motor = VoidAI_Engine(self.db_path)
-            sonuclar = motor.tum_analizleri_yap()
-            self.finished.emit(sonuclar)
+            try:
+                conn = sqlite3.connect(self.db_path)
+                alerts = []
+                query = """
+                    SELECT name, stock, critical_stock 
+                    FROM products 
+                    WHERE stock <= critical_stock 
+                    AND stock > 0 
+                    ORDER BY stock ASC 
+                    LIMIT 50
+                """
+                
+                cursor = conn.execute(query)
+                for name, stock, crit in cursor.fetchall():
+                    alerts.append({
+                        "tur": "KRITIK",
+                        "mesaj": f"⚠️ KRİTİK: {name} ({stock} kaldı)"
+                    })
+                conn.close()
+                self.finished.emit(alerts)
+            except Exception as e:
+                print(f"AI Worker Hatası: {e}")
+                self.finished.emit([])
         else:
             self.finished.emit([])
 
@@ -3252,13 +3321,21 @@ class VoidPOS(QMainWindow):
             urun_sayisi = self.db.cursor.execute("SELECT Count(*) FROM products").fetchone()[0]
             if urun_sayisi == 0:
                 print("Veritabanı boş. CSV aranıyor...")
-                csv_yolu = os.path.join(get_app_path(), "urunler_temiz.csv")
                 
-                if os.path.exists(csv_yolu):
+                csv_dosyalari = ["urunler_temiz.csv", "urunler.csv"]
+                csv_yolu = None
+                
+                for dosya in csv_dosyalari:
+                    yol = os.path.join(get_app_path(), dosya)
+                    if os.path.exists(yol):
+                        csv_yolu = yol
+                        break
+                if csv_yolu:
+                    print(f"📥 CSV bulundu, yükleniyor: {csv_yolu}")
                     basari, mesaj = self.db.import_products_from_csv(csv_yolu)
-                    print(f"Otomatik Yükleme Sonucu: {mesaj}")
+                    print(f"Sonuç: {mesaj}")
                 else:
-                    print(f"UYARI: {csv_yolu} dosyası bulunamadı!")
+                    QMessageBox.warning(None, "CSV Yok", f"Ürün dosyası bulunamadı!\nLütfen exe'nin yanına 'urunler.csv' dosyasını koyun.")
         except Exception as e:
             print(f"Otomatik yükleme hatası: {e}")
             
@@ -3266,6 +3343,13 @@ class VoidPOS(QMainWindow):
         self.barcode_buffer = ""
         self.ciro_visible = True 
         self.init_ui()
+        self.settings = QSettings("VoidDynamics", "VoidPOS") # Ayarları tutacak yer
+        try:
+            geometry = self.settings.value("geometry")
+            if geometry:
+                self.restoreGeometry(geometry)
+        except Exception as e:
+            print(f"Konum yüklenemedi: {e}")
         self.setWindowTitle("VoidPOS")
         self.resize(1600, 900)
         self.ai = VoidBrain_Analytic("voidpos.db")
@@ -3277,7 +3361,7 @@ class VoidPOS(QMainWindow):
         self.db.export_products_to_csv("urunler_klasoru/urunler.csv")
         self.ai_timer = QTimer(self)
         self.ai_timer.timeout.connect(self.ai_otomatik_kontrol)
-        self.ai_timer.start(10000) # 10.000 ms = 10 
+        self.ai_timer.start(10000) 
         
     def init_ui(self):
         central = QWidget()
@@ -3286,9 +3370,10 @@ class VoidPOS(QMainWindow):
         main_lay.setContentsMargins(0, 2, 0, 0)
         main_lay.setSpacing(0)
         
+        
         # --- 1. SOL PANEL (AYNI) ---
         left_container = QFrame()
-        left_container.setFixedWidth(480) 
+        left_container.setFixedWidth(420) 
         left_container.setObjectName("LeftPanel")
         left_layout = QVBoxLayout(left_container)
         left_layout.setContentsMargins(10, 10, 10, 0) 
@@ -3297,6 +3382,7 @@ class VoidPOS(QMainWindow):
         # Arama
         self.search_bar = QLineEdit()
         self.search_bar.setPlaceholderText("🔍 Ara...")
+        self.search_bar.returnPressed.connect(self.on_search_return_pressed)
         self.search_bar.setFixedHeight(45)
         self.search_bar.textChanged.connect(self.on_search_changed)
         left_layout.addWidget(self.search_bar)
@@ -3399,6 +3485,19 @@ class VoidPOS(QMainWindow):
         
         self.load_categories_grid()
         self.table.installEventFilter(self)
+
+    def on_search_return_pressed(self):
+        """Barkod okuyucu Enter'a bastığında çalışır"""
+        text = self.search_bar.text().strip()
+        if not text: return
+
+        product = self.db.get_product_by_barcode(text)
+        
+        if product:
+            self.add_to_cart(product[0], product[1]) 
+            self.search_bar.clear() 
+            return
+        self.execute_search()
 
     def refresh_after_ai(self):
         print("🔄 AI sonrası sistem yenileniyor...")
@@ -3555,6 +3654,16 @@ class VoidPOS(QMainWindow):
         table.doubleClicked.connect(self.on_table_double_clicked)
         
         return table
+
+    def moveEvent(self, event):
+        """Pencere hareket ettirildiğinde konumunu kaydet"""
+        self.settings.setValue("geometry", self.saveGeometry())
+        super().moveEvent(event)
+
+    def resizeEvent(self, event):
+        """Pencere boyutu değiştiğinde kaydet"""
+        self.settings.setValue("geometry", self.saveGeometry())
+        super().resizeEvent(event)
 
     def add_to_cart(self, name, price):
         table = self.get_active_table()
@@ -3836,7 +3945,6 @@ class VoidPOS(QMainWindow):
                 def on_double_click(prod_name):
                     self.open_product_detail_popup(prod_name)
 
-                # ProductCard Oluşturma
                 card = ProductCard(
                     pid, name, price, img, fav, stock, 
                     on_click, 
@@ -3979,7 +4087,7 @@ class VoidPOS(QMainWindow):
                 
                 # Kart oluşturma (Mini mod)
                 card = ProductCard(pid, name, price, img, fav, stock, on_click, self.refresh_ui, self.db, is_mini=True)
-                card.setFixedSize(135, 160)
+                card.setFixedSize(125, 160)
                 
                 fav_grid.addWidget(card, f_row, f_col)
                 
@@ -4170,7 +4278,7 @@ class VoidPOS(QMainWindow):
         layout.addWidget(scroll)
         
         btn_close = QPushButton("KAPAT")
-        btn_close.setFixedHeight(60)
+        btn_close.setFixedHeight(40)
         btn_close.setStyleSheet("background-color: #333; color: white; border-radius: 8px; font-weight:bold; font-size: 16px;")
         btn_close.clicked.connect(dlg.accept)
         layout.addWidget(btn_close)
@@ -4675,55 +4783,38 @@ class AdminDialog(QDialog):
         self.setWindowTitle("Yönetim Paneli")
         self.resize(1200, 800)
 
-        # 1. Layout ve Tabs oluştur
         layout = QVBoxLayout(self)
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)
         
-        # 2. Değişkenleri Tanımla
         self.editing_pid = None
         self.filter_mode = 'day'
         self.last_tab_index = 0
 
-        # 3. Sekmeleri Oluştur (Sırasıyla)
-        # Index 0: AI
         self.setup_native_ai_tab()        
-        # Index 1: Finansal Rapor
         self.setup_finances()             
-        # Index 2: Satış Geçmişi
         self.setup_sales_history()        
-        # Index 3: Ürün Listesi
         self.setup_prod_list()            
-        # Index 4: Ürün Ekle
         self.setup_add_prod()             
-        # Index 5: Stok Takip
         self.setup_stock_tracking()       
-        # Index 6: Bekleyen İşlemler
         self.setup_pending_transactions() 
-        # Index 7: Toplu İşlemler
         self.setup_bulk_operations()      
-        # Index 8: Tema
         self.setup_theme_settings()       
-        
-        # 4. Sinyali EN SON bağla (Hata almamak için)
         self.tabs.currentChanged.connect(self.on_tab_change)
-
-        # 5. İlk açılışta AI sekmesi (Index 0) açık olacağı için özel bir yükleme gerekmez,
-
 
     def on_tab_change(self, index):
         self.last_tab_index = index
         
-        if index == 1:   # Finansal (Eskiden 0'dı, şimdi 1 oldu)
+        if index == 1:
             self.load_finance_data()
-        elif index == 2: # Satış Geçmişi
+        elif index == 2: 
             self.load_sales_history_data()
-        elif index == 3: # Ürün Listesi
+        elif index == 3: 
             self.load_table_data()
-        elif index == 5: # Stok Takip
+        elif index == 5: 
             self.stk_stock.setCurrentIndex(0) 
             self.load_stock_categories()
-        elif index == 6: # Bekleyen
+        elif index == 6: 
             self.load_pending_data()
 
     def setup_theme_settings(self):
@@ -4731,28 +4822,23 @@ class AdminDialog(QDialog):
         self.tabs.addTab(editor, "🎨 Tema Ayarları")
 
     def setup_native_ai_tab(self):
-        """Kütüphane tabanlı yerel AI sekmesi"""
-        self.brain = VoidBrain_Analytic(self.db.db_name) # Motoru başlat
+        self.brain = VoidBrain_Analytic(self.db.db_name) 
         
         w = QWidget()
         layout = QVBoxLayout(w)
         
-        # --- Başlık ---
+
         lbl_title = QLabel("🧠 Void Dynamics - Analitik Çekirdek")
         lbl_title.setStyleSheet("font-size: 20px; font-weight: bold; color: #30d158;")
         layout.addWidget(lbl_title)
-        
-        # --- Butonlar ---
         btn_forecast = QPushButton("📈 Gelecek Haftayı Tahmin Et (Regression)")
         btn_forecast.clicked.connect(self.run_sales_forecast)
-        
         btn_segment = QPushButton("🛒 Müşteri Tiplerini Analiz Et (Clustering)")
         btn_segment.clicked.connect(self.run_segmentation)
         
         layout.addWidget(btn_forecast)
         layout.addWidget(btn_segment)
-        
-        # --- Sonuç Ekranı ---
+
         self.lbl_ai_output = QLabel("Analiz bekleniyor...")
         self.lbl_ai_output.setStyleSheet("background: #222; padding: 15px; border-radius: 10px; font-size: 14px;")
         self.lbl_ai_output.setWordWrap(True)
@@ -4761,23 +4847,34 @@ class AdminDialog(QDialog):
         layout.addStretch()
         self.tabs.addTab(w, "Analitik AI")
 
+    # ============================================================
+    # BU İKİ FONKSİYONU AdminDialog SINIFININ İÇİNE YAPIŞTIR
+    # (Eski run_sales_forecast ve run_segmentation yerine)
+    # ============================================================
+
     def run_sales_forecast(self):
-        res = self.brain.predict_sales(7)
-        if isinstance(res, dict):
-            msg = f"🔮 **Gelecek 7 Günün Tahmini:**\n\n"
-            msg += f"Toplam Beklenen Ciro: **{res['total_predicted']:.2f} TL**\n\n"
-            msg += "Günlük Detay:\n"
-            for date, val in zip(res['dates'], res['values']):
-                msg += f"• {date}: {val:.2f} TL\n"
-            self.lbl_ai_output.setText(msg)
-        else:
-            self.lbl_ai_output.setText(res) # Hata mesajı
+        self.lbl_ai_output.setText("⏳ Tahmin yapılıyor, veri analizi sürüyor...")
+        QApplication.processEvents() 
+        
+        try:
+            res = self.brain.predict_next_week_demand()
+            self.lbl_ai_output.setText(str(res))
+                
+        except Exception as e:
+            self.lbl_ai_output.setText(f"❌ Tahmin Hatası:\n{str(e)}")
 
     def run_segmentation(self):
-        res = self.brain.analyze_basket_segments()
-        self.lbl_ai_output.setText(res)
+        self.lbl_ai_output.setText("⏳ Müşteriler segmente ediliyor...")
+        QApplication.processEvents()
+        
+        try:
+            res = self.brain.segment_customers()
+            self.lbl_ai_output.setText(str(res))
+            
+        except Exception as e:
+            self.lbl_ai_output.setText(f"❌ Segmentasyon Hatası:\n{str(e)}")
 
-    # --- AKSİYONLAR ---
+
 
     def action_forecast_graph(self):
         """Tahminleri Grafik Olarak Çizer"""
@@ -4788,17 +4885,17 @@ class AdminDialog(QDialog):
             self.ai_canvas.hide()
             return
             
-        # Grafiği Görünür Yap
+
         self.ai_canvas.show()
         self.ai_canvas.axes.clear()
         
-        # Geçmiş (Mavi)
+
         hist_dates, hist_vals = data['history']
         self.ai_canvas.axes.plot(hist_dates, hist_vals, label='Geçmiş', color='#0a84ff', marker='o')
         
-        # Gelecek (Kesikli Çizgi - Mor)
+
         future_dates, future_vals = data['forecast']
-        # Çizgiyi birleştirmek için son geçmiş veriyi ekle
+
         if hist_dates and future_dates:
             connect_dates = [hist_dates[-1], future_dates[0]]
             connect_vals = [hist_vals[-1], future_vals[0]]
@@ -4816,7 +4913,7 @@ class AdminDialog(QDialog):
         self.ai_result_box.setText(f"📊 Grafik oluşturuldu. Gelecek 7 gün için tahmini ciro: {total_est:.2f} ₺")
 
     def action_busy_hours(self):
-        self.ai_canvas.hide() # Grafiği gizle
+        self.ai_canvas.hide() 
         res = self.ai.analyze_busy_hours()
         if not res:
             self.ai_result_box.setText("Yetersiz zaman verisi.")
@@ -4893,19 +4990,15 @@ class AdminDialog(QDialog):
         self.cmb_cat.setCurrentText(product[6])
         self.inp_code.setText(product[7] if product[7] else "")
         
-        # UI Güncellemesi
         self.lbl_form_title.setText(f"ÜRÜN DÜZENLE (ID: {self.editing_pid})")
-        self.lbl_form_title.setStyleSheet("font-size: 22px; font-weight: bold; color: #ff9f0a;") # Turuncu başlık
+        self.lbl_form_title.setStyleSheet("font-size: 22px; font-weight: bold; color: #ff9f0a;")
         
         self.btn_save.setText("GÜNCELLE")
         self.btn_save.setProperty("class", "SuccessBtn")
         
-        # Sekmeyi "Ürün Ekle / Düzenle"ye (Index 3) kaydır
         self.tabs.setCurrentIndex(3)
 
     def load_stock_categories(self):
-        """Stok takibi için kategori butonlarını yükler"""
-        # Önce eski butonları temizle
         while self.cat_btn_layout.count():
             child = self.cat_btn_layout.takeAt(0)
             if child.widget(): child.widget().deleteLater()
@@ -4913,15 +5006,14 @@ class AdminDialog(QDialog):
         categories = self.db.get_all_categories()
         
         row, col = 0, 0
-        max_col = 4 # Yan yana 4 buton
+        max_col = 4 
         
         for cat in categories:
             if cat == "Tüm Ürünler": continue # "Tüm Ürünler" çok kasacağı için stokta göstermeyelim veya sona ekleyelim
             
             btn = QPushButton(cat)
-            btn.setFixedSize(200, 100)
+            btn.setFixedSize(160, 100)
             btn.setCursor(Qt.PointingHandCursor)
-            # Modern Kart Görünümlü Buton
             btn.setStyleSheet("""
                 QPushButton { 
                     background-color: #252525; 
@@ -6057,7 +6149,6 @@ class ProductDetailDialog(QDialog):
 
 
 if __name__ == "__main__":
-    from PySide6.QtWidgets import QFormLayout
     app = QApplication(sys.argv)
     
     font = QFont(".AppleSystemUIFont", 13) 
