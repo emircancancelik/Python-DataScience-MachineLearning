@@ -1,0 +1,5 @@
+2026-02-20 22:19:26,407 INFO root VoidPOS başlatıldı - GERÇEK POS MODU
+2026-02-20 22:20:08,348 INFO UniversalPOSManager ✅ Ingenico Sürücüsü Başlatıldı
+2026-02-20 22:20:08,348 INFO POSService TX START | 9d2ff61a | 2580.00 TL
+2026-02-20 22:20:08,348 INFO UniversalPOSManager 🚀 TX:6317d330 BAŞLADI | Tip: CASH | Tutar: 2580.00
+2026-02-20 22:20:08,351 WARNING UniversalPOSManager ❌ TX:6317d330 BAŞARISIZ | Hata: HATA: ixirYazarkasa.exe dosyası klasörde yok!
