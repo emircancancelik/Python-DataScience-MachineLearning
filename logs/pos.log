@@ -1,5 +1,17 @@
+<<<<<<< HEAD
 2026-02-20 22:19:26,407 INFO root VoidPOS başlatıldı - GERÇEK POS MODU
 2026-02-20 22:20:08,348 INFO UniversalPOSManager ✅ Ingenico Sürücüsü Başlatıldı
 2026-02-20 22:20:08,348 INFO POSService TX START | 9d2ff61a | 2580.00 TL
 2026-02-20 22:20:08,348 INFO UniversalPOSManager 🚀 TX:6317d330 BAŞLADI | Tip: CASH | Tutar: 2580.00
 2026-02-20 22:20:08,351 WARNING UniversalPOSManager ❌ TX:6317d330 BAŞARISIZ | Hata: HATA: ixirYazarkasa.exe dosyası klasörde yok!
+=======
+2026-02-19 17:39:27,335 INFO root VoidPOS başlatıldı - GERÇEK POS MODU
+2026-02-19 17:43:00,113 INFO UniversalPOSManager ✅ Ingenico Sürücüsü Başlatıldı
+2026-02-19 17:43:00,114 INFO POSService TX START | 64f81581 | 3440.00 TL
+2026-02-19 17:43:00,114 INFO UniversalPOSManager 🚀 TX:e5aaaa42 BAŞLADI | Tip: CASH | Tutar: 3440.00
+2026-02-19 17:43:00,117 WARNING UniversalPOSManager ❌ TX:e5aaaa42 BAŞARISIZ | Hata: HATA: ixirYazarkasa.exe dosyası klasörde yok!
+2026-02-19 17:43:06,577 INFO UniversalPOSManager ✅ Ingenico Sürücüsü Başlatıldı
+2026-02-19 17:43:06,577 INFO POSService TX START | dffe1846 | 3440.00 TL
+2026-02-19 17:43:06,577 INFO UniversalPOSManager 🚀 TX:8d69251e BAŞLADI | Tip: CARD | Tutar: 3440.00
+2026-02-19 17:43:06,578 WARNING UniversalPOSManager ❌ TX:8d69251e BAŞARISIZ | Hata: HATA: ixirYazarkasa.exe dosyası klasörde yok!
+>>>>>>> 5143250 (veri bilimi ders sonu)
