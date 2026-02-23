@@ -1,6 +1,7 @@
 from django import forms
 from django.forms import ModelForm
 from tweetapp.models import Tweet
+import pandas as np
 
 class AddTweetForm(forms.Form):
     nickname_input = forms.CharField(label="Nickname",max_length=50)
